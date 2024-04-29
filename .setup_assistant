@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: xarm_description
+    relative_path: urdf/xarm_device.urdf.xacro
+  srdf:
+    relative_path: config/UF_ROBOT.srdf
+  package_settings:
+    author_name: Enrico Piacenti
+    author_email: s5636699@studenti.unige.it
+    generated_timestamp: 1713528723
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
