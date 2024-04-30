@@ -1,0 +1,1 @@
+Next step: Verify how Robot state and model methos are working. It is improtant to define correctly a reference frame and easly get the poses of each joint belongin to the joint group
