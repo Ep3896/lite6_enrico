@@ -1,1 +1,5 @@
 Next step: Verify how Robot state and model methos are working. It is improtant to define correctly a reference frame and easly get the poses of each joint belongin to the joint group
+
+# Beware 
+
+Pose_controlled.ipynb is the only one that actually works, other are just random tests.
