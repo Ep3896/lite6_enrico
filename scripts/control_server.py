@@ -22,6 +22,7 @@ from math import pi
 def plan_and_execute(robot, planning_component, logger, single_plan_parameters=None, multi_plan_parameters=None, sleep_time=0.0):
     # plan to goal
     logger.info("Planning trajectory")
+    stopper = lite6.get_trajactory_execution_manager()
     if multi_plan_parameters is not None:
         plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)
     elif single_plan_parameters is not None:
@@ -34,6 +35,7 @@ def plan_and_execute(robot, planning_component, logger, single_plan_parameters=N
         logger.info("Executing plan")
         robot_trajectory = plan_result.trajectory
         robot.execute(robot_trajectory, controllers=[])
+        stopper.stop_execution()
     else:
         logger.error("Planning failed")
 
@@ -59,6 +61,7 @@ def got_to_position(movx, movy, movz):
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
 
             lite6_arm.set_start_state_to_current_state()
+            check_init_pose = robot_state.get_pose("camera_depth_frame")
 
             quaternion = get_quaternion_from_euler (0, pi, 0)
 
@@ -66,15 +69,59 @@ def got_to_position(movx, movy, movz):
 
             pose_goal = Pose() 
 
+            """
+            if movz > -0.25 and movz < 0.14:
+                pose_goal.position.z = movz
+            elif movz > 0.14:
+                pose_goal.position.z = 0.14
+            else:
+                pose_goal.position.z = -0.25
+            
+            if movy > -0.60 and movy < 0.30:
+                pose_goal.position.y = movy
+            elif movy > 0.30:
+                pose_goal.position.y = 0.30
+            else:
+                pose_goal.position.y = -0.60
 
-            pose_goal.position.x = movx 
-            pose_goal.position.y = movy
+
+            if movx > 0.15 and movx < 0.42:
+                pose_goal.position.x = movx
+            elif movx > 0.42:
+                pose_goal.position.x = 0.42
+            else:
+                pose_goal.position.x = 0.15
+            """
+            """
+            if pose_goal.position.x <= 0.32:
+                pose_goal.position.x = movx + 0.1
+            elif pose_goal.position.x > 0.32:
+                pose_goal.position.x = 0.42
+            else:
+                print("Error in x position, risk of collision with itself")
+
+            if pose_goal.position.y >= -0.45 or pose_goal.position.y <= 0.30:
+                pose_goal.position.y = movy + 0.25
+            
+            if pose_goal.position.y >= -0.65 or pose_goal.position.y <= -0.45:
+                pose_goal.position.y = movy + 0.25
+            elif pose_goal.position.y < -0.65:
+                pose_goal.position.y = -0.45
+
             if movz > 0.15:
                 pose_goal.position.z = movz
             else:
                 pose_goal.position.z = 0.15
-
+            """
+            pose_goal.position.x = movx
+            pose_goal.position.y = movz
+            if check_init_pose.position.z >= 0.16:
+                pose_goal.position.z = check_init_pose.position.z - 0.01
+            else:
+                pose_goal.position.z = 0.15
             
+            """
+            """
             #this configuration is for the camera_depth_frame
             pose_goal.orientation.x = 0.0
             pose_goal.orientation.y = 0.68
@@ -87,7 +134,7 @@ def got_to_position(movx, movy, movz):
             pose_goal.orientation.w = 0.0
             """
             # Set the robot state and check collisions
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=2.0)
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=1.0)
             #result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=5.0)
             if not result:
                 logger.error("IK solution was not found!")
@@ -117,8 +164,8 @@ def got_to_position(movx, movy, movz):
                 robot_state.update()
 
         if plan == True:
-            plan_and_execute(lite6, lite6_arm, logger,sleep_time=2.0)
-
+            plan_and_execute(lite6, lite6_arm, logger,sleep_time=0.5)
+            """
             time.sleep(3.0)
 
             lite6_arm.set_start_state_to_current_state()
@@ -133,6 +180,7 @@ def got_to_position(movx, movy, movz):
                 lite6.execute(robot_trajectory, controllers=[])
             else:
                 logger.error("Planning failed, no getting back to initial position!")
+            """
 
 
 # Action server class
@@ -188,7 +236,7 @@ def main(args=None):
 
     lite6 = MoveItPy(node_name="moveit_py", config_dict=moveit_config)
     lite6_arm = lite6.get_planning_component("lite6_arm")
-
+    
 
     action_server = GoToPoseActionServer()
     rclpy.spin(action_server)
