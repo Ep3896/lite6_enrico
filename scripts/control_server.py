@@ -116,12 +116,13 @@ def got_to_position(movx, movy, movz):
             pose_goal.position.x = movx
             pose_goal.position.y = movz
             if check_init_pose.position.z >= 0.16:
-                pose_goal.position.z = check_init_pose.position.z - 0.01
+                pose_goal.position.z = check_init_pose.position.z - 0.1
             else:
                 pose_goal.position.z = 0.15
             
             """
-            """
+            
+            
             #this configuration is for the camera_depth_frame
             pose_goal.orientation.x = 0.0
             pose_goal.orientation.y = 0.68
@@ -132,9 +133,9 @@ def got_to_position(movx, movy, movz):
             pose_goal.orientation.y = 0.0
             pose_goal.orientation.z = 0.0
             pose_goal.orientation.w = 0.0
-            """
+            
             # Set the robot state and check collisions
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=1.0)
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)
             #result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=5.0)
             if not result:
                 logger.error("IK solution was not found!")
@@ -150,7 +151,7 @@ def got_to_position(movx, movy, movz):
             
                 robot_state.update() # otherwise the kernel crashes
 
-                check_updated_pose = robot_state.get_pose("camera_depth_frame")
+                check_updated_pose = robot_state.get_pose("link_tcp")
                 #check_updated_pose = robot_state.get_pose("camera_depth_frame")
 
                 print("New_pose:", check_updated_pose)

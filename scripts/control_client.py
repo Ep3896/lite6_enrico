@@ -22,6 +22,12 @@ class CameraControlNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        # Image plane parameters
+        self.image_width = 1280  # Adjust based on your camera resolution
+        self.image_height = 720 # Adjust based on your camera resolution
+        self.center_x = self.image_width / 2
+        self.center_y = self.image_height / 2
+
     def detection_callback(self, msg):
         if msg.markers:
             marker = msg.markers[0]  # Process the first marker, or modify as needed
@@ -35,8 +41,11 @@ class CameraControlNode(Node):
                 transform = self.tf_buffer.lookup_transform('world', 'camera_depth_frame', rclpy.time.Time(), rclpy.duration.Duration(seconds=1))
                 world_point = tf2_geometry_msgs.do_transform_point(bbox_center, transform).point
 
-                goal_x = world_point.x + 0.2
-                goal_y = world_point.y + 0.3
+                # Adjust the goal based on the centroid's position in the image plane
+                adjustment_x, adjustment_y = self.calculate_adjustments(marker.pose.position)
+
+                goal_x = world_point.x + adjustment_x
+                goal_y = world_point.y + adjustment_y
                 goal_z = world_point.z
                 print(f'Goal: ({goal_x}, {goal_y}, {goal_z})')
 
@@ -49,6 +58,21 @@ class CameraControlNode(Node):
                 self.send_goal(goal_x, goal_y, goal_z)
             except (LookupException, ConnectivityException, ExtrapolationException) as e:
                 self.get_logger().error(f'Could not transform point: {e}')
+
+    def calculate_adjustments(self, position):
+        # Calculate the error in the image plane
+        error_x = position.x - self.center_x
+        error_y = position.y - self.center_y
+
+        # Define the adjustment scale (tune these values based on your system)
+        adjustment_scale_x = 0.01
+        adjustment_scale_y = 0.01
+
+        # Calculate the adjustments
+        adjustment_x = -adjustment_scale_x * error_x / self.image_width
+        adjustment_y = -adjustment_scale_y * error_y / self.image_height
+
+        return adjustment_x, adjustment_y
 
     def send_goal(self, x, y, z):
         goal_msg = GoToPose.Goal()
