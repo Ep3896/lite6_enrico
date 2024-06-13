@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
+
 import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer
 from rclpy.logging import get_logger
 from lite6_enrico_interfaces.action import GoToPose
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Point, Quaternion
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy
 from moveit.planning import MultiPipelinePlanRequestParameters
 import numpy as np
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
+from std_msgs.msg import Bool
 import os
-from geometry_msgs.msg import Point, Quaternion
-from math import pi
-
-
+from math import pi, sqrt
 
 # Plan and execute function
 def plan_and_execute(robot, planning_component, logger, single_plan_parameters=None, multi_plan_parameters=None, sleep_time=0.0):
-    # plan to goal
     logger.info("Planning trajectory")
-    stopper = lite6.get_trajactory_execution_manager()
     if multi_plan_parameters is not None:
         plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)
     elif single_plan_parameters is not None:
@@ -30,18 +27,15 @@ def plan_and_execute(robot, planning_component, logger, single_plan_parameters=N
     else:
         plan_result = planning_component.plan()
 
-    # execute the plan
     if plan_result:
         logger.info("Executing plan")
         robot_trajectory = plan_result.trajectory
         robot.execute(robot_trajectory, controllers=[])
-        stopper.stop_execution()
     else:
         logger.error("Planning failed")
 
     time.sleep(sleep_time)
 
-# Convert Euler angles to quaternions
 def get_quaternion_from_euler(roll, pitch, yaw):
     qx = np.sin(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) - np.cos(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
     qy = np.cos(roll/2) * np.sin(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.cos(pitch/2) * np.sin(yaw/2)
@@ -49,161 +43,58 @@ def get_quaternion_from_euler(roll, pitch, yaw):
     qw = np.cos(roll/2) * np.cos(pitch/2) * np.cos(yaw/2) + np.sin(roll/2) * np.sin(pitch/2) * np.sin(yaw/2)
     return [qx, qy, qz, qw]
 
-# Go to pose function
-def got_to_position(movx, movy, movz):
-        plan = False
-        planning_scene_monitor = lite6.get_planning_scene_monitor()
-        #with planning_scene_monitor.read_write() as scene:
-        with planning_scene_monitor.read_write() as scene:
+def go_to_position(movx, movy, movz, previous_position, movement_threshold, rotate=False):
+    plan = False
+    planning_scene_monitor = lite6.get_planning_scene_monitor()
+    with planning_scene_monitor.read_write() as scene:
+        robot_state = scene.current_state
+        original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+        lite6_arm.set_start_state_to_current_state()
+        check_init_pose = robot_state.get_pose("camera_depth_frame")
 
-            # instantiate a RobotState instance using the current robot model
-            robot_state = scene.current_state
-            original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+        # Calculate the distance between the previous position and the new position
+        distance = sqrt((movx - previous_position.x)**2 + (movy - previous_position.y)**2 + (movz - previous_position.z)**2)
 
-            lite6_arm.set_start_state_to_current_state()
-            check_init_pose = robot_state.get_pose("camera_depth_frame")
+        # Check if the distance exceeds the movement threshold
+        if distance > movement_threshold:
+            scale = movement_threshold / distance
+            movx = previous_position.x + scale * (movx - previous_position.x)
+            movy = previous_position.y + scale * (movy - previous_position.y)
+            movz = previous_position.z + scale * (movz - previous_position.z)
 
-            quaternion = get_quaternion_from_euler (0, pi, 0)
+        pose_goal = Pose()
+        pose_goal.position.x = max(movx, 0.1)
+        pose_goal.position.y = max(min(movy, 0.3), -0.45)
+        pose_goal.position.z = max(min(movz, 0.45), 0.16)
 
-            # With this configuration of the orientation the gripper is always parallel to the x axis, so it aims  orientation [1.0,0.0,0.0,0.0] -> for link_tcp
+        pose_goal.orientation.x = 1.0
+        pose_goal.orientation.y = 0.0
+        pose_goal.orientation.z = 0.0
+        pose_goal.orientation.w = 0.0
 
-            pose_goal = Pose() 
+        result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)
+        if not result:
+            logger.error("IK solution was not found!")
+            logger.error("Failed goal is: {}".format(pose_goal))
+            return
+        else:
+            logger.info("IK solution found!")
+            logger.info("\033[92mGoal is: {}\033[0m".format(pose_goal))
 
-            """
-            if movz > -0.25 and movz < 0.14:
-                pose_goal.position.z = movz
-            elif movz > 0.14:
-                pose_goal.position.z = 0.14
-            else:
-                pose_goal.position.z = -0.25
-            
-            if movy > -0.60 and movy < 0.30:
-                pose_goal.position.y = movy
-            elif movy > 0.30:
-                pose_goal.position.y = 0.30
-            else:
-                pose_goal.position.y = -0.60
+            plan = True
+            lite6_arm.set_goal_state(robot_state=robot_state)
+            robot_state.update()
+            check_updated_pose = robot_state.get_pose("link_tcp")
+            print("New_pose:", check_updated_pose)
+            logger.info("Go to goal")
 
+            robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+            robot_state.update()
 
-            if movx > 0.15 and movx < 0.42:
-                pose_goal.position.x = movx
-            elif movx > 0.42:
-                pose_goal.position.x = 0.42
-            else:
-                pose_goal.position.x = 0.15
-            """
-            """
-            if pose_goal.position.x <= 0.32:
-                pose_goal.position.x = movx + 0.1
-            elif pose_goal.position.x > 0.32:
-                pose_goal.position.x = 0.42
-            else:
-                print("Error in x position, risk of collision with itself")
+    if plan:
+        plan_and_execute(lite6, lite6_arm, logger, sleep_time=0.5)
+        return pose_goal.position  # Return the new position
 
-            if pose_goal.position.y >= -0.45 or pose_goal.position.y <= 0.30:
-                pose_goal.position.y = movy + 0.25
-            
-            if pose_goal.position.y >= -0.65 or pose_goal.position.y <= -0.45:
-                pose_goal.position.y = movy + 0.25
-            elif pose_goal.position.y < -0.65:
-                pose_goal.position.y = -0.45
-
-            if movz > 0.15:
-                pose_goal.position.z = movz
-            else:
-                pose_goal.position.z = 0.15
-            """
-
-            if movx > 0.1:
-                pose_goal.position.x = movx
-            else:
-                pose_goal.position.x = 0.1
-
-            if pose_goal.position.y >= -0.45 or pose_goal.position.y <= 0.30: 
-                pose_goal.position.y = movy
-            elif pose_goal.position.y < -0.45:
-                pose_goal.position.y = -0.45
-            else:
-                pose_goal.position.y = 0.30
-
-
-
-
-
-
-            if check_init_pose.position.z >= 0.16 and check_init_pose.position.z <= 0.45:
-                pose_goal.position.z = check_init_pose.position.z - 0.1
-                print("check_init_pose.position.z:", check_init_pose.position.z)
-            elif check_init_pose.position.z < 0.16:
-                pose_goal.position.z = 0.15
-            else:
-                pose_goal.position.z = 0.38
-            
-            """
-            
-            
-            #this configuration is for the camera_depth_frame
-            pose_goal.orientation.x = 0.0
-            pose_goal.orientation.y = 0.68
-            pose_goal.orientation.z = 0.0
-            pose_goal.orientation.w = 0.72
-            """
-            pose_goal.orientation.x = 1.0
-            pose_goal.orientation.y = 0.0
-            pose_goal.orientation.z = 0.0
-            pose_goal.orientation.w = 0.0
-            
-            # Set the robot state and check collisions
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)
-            #result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=5.0)
-            if not result:
-                logger.error("IK solution was not found!")
-                logger.error("Failed goal is: {}".format(pose_goal))
-                return
-            else:
-                logger.info("IK solution found!")
-                logger.info("\033[92mGoal is: {}\033[0m".format(pose_goal))
-
-                plan = True
-            
-                lite6_arm.set_goal_state(robot_state=robot_state)   
-            
-                robot_state.update() # otherwise the kernel crashes
-
-                check_updated_pose = robot_state.get_pose("link_tcp")
-                #check_updated_pose = robot_state.get_pose("camera_depth_frame")
-
-                print("New_pose:", check_updated_pose)
-
-                logger.info("Go to goal")
-
-                robot_state.set_joint_group_positions(
-                "lite6_arm",
-                original_joint_positions,
-                    )
-                robot_state.update()
-
-        if plan == True:
-            plan_and_execute(lite6, lite6_arm, logger,sleep_time=0.5)
-            """
-            time.sleep(3.0)
-
-            lite6_arm.set_start_state_to_current_state()
-            lite6_arm.set_goal_state(configuration_name="Ready")
-            # plan to goal
-            plan_result = lite6_arm.plan()
-
-            # execute the plan
-            if plan_result:
-                logger.info("Executing plan")
-                robot_trajectory = plan_result.trajectory
-                lite6.execute(robot_trajectory, controllers=[])
-            else:
-                logger.error("Planning failed, no getting back to initial position!")
-            """
-
-
-# Action server class
 class GoToPoseActionServer(Node):
 
     def __init__(self):
@@ -214,34 +105,35 @@ class GoToPoseActionServer(Node):
             'go_to_pose',
             execute_callback=self.execute_callback)
         self._logger = get_logger("go_to_pose_action_server")
+        self.create_subscription(Bool, 'rotation_flag', self.rotation_callback, 10)
+        self.rotate = False
+        self.previous_position = Point(x=0.3106, y=0.017492, z=0.44321)  # Initial position
+        self.movement_threshold = 0.05  # Maximum allowed movement in meters
+
+    def rotation_callback(self, msg):
+        if msg.data:
+            self.rotate = True
 
     def execute_callback(self, goal_handle):
         self._logger.info('Executing goal...')
         goal = goal_handle.request.pose
         movx, movy, movz = goal.position.x, goal.position.y, goal.position.z
 
-        # Call the go_to_pose function
-        got_to_position(movx, movy, movz)
+        new_position = go_to_position(movx, movy, movz, self.previous_position, self.movement_threshold, self.rotate)
+        if new_position:
+            self.previous_position = new_position  # Update the previous position
 
-        # Notify the action client that the goal was completed
         goal_handle.succeed()
+        self.rotate = False  # Reset the rotation flag after execution
 
         result = GoToPose.Result()
-
         result.success = True
-        """
-        result.pose = Pose(
-            position=Point(x=movx, y=movy, z=movz),
-            orientation=Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
-        )
-        """
         return result
 
 def main(args=None):
     rclpy.init(args=args)
     global logger, lite6, lite6_arm
     logger = get_logger("moveit_py.pose_goal")
-
 
     moveit_config = (
         MoveItConfigsBuilder(robot_name="UF_ROBOT", package_name="lite6_enrico")
@@ -256,7 +148,6 @@ def main(args=None):
 
     lite6 = MoveItPy(node_name="moveit_py", config_dict=moveit_config)
     lite6_arm = lite6.get_planning_component("lite6_arm")
-    
 
     action_server = GoToPoseActionServer()
     rclpy.spin(action_server)
