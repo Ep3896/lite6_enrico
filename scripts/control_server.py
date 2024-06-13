@@ -113,12 +113,31 @@ def got_to_position(movx, movy, movz):
             else:
                 pose_goal.position.z = 0.15
             """
-            pose_goal.position.x = movx
-            pose_goal.position.y = movz
-            if check_init_pose.position.z >= 0.16:
-                pose_goal.position.z = check_init_pose.position.z - 0.1
+
+            if movx > 0.1:
+                pose_goal.position.x = movx
             else:
+                pose_goal.position.x = 0.1
+
+            if pose_goal.position.y >= -0.45 or pose_goal.position.y <= 0.30: 
+                pose_goal.position.y = movy
+            elif pose_goal.position.y < -0.45:
+                pose_goal.position.y = -0.45
+            else:
+                pose_goal.position.y = 0.30
+
+
+
+
+
+
+            if check_init_pose.position.z >= 0.16 and check_init_pose.position.z <= 0.45:
+                pose_goal.position.z = check_init_pose.position.z - 0.1
+                print("check_init_pose.position.z:", check_init_pose.position.z)
+            elif check_init_pose.position.z < 0.16:
                 pose_goal.position.z = 0.15
+            else:
+                pose_goal.position.z = 0.38
             
             """
             
