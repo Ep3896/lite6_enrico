@@ -8,20 +8,6 @@ Panels:
         - /MotionPlanning1/Planned Path1
         - /TF1
         - /TF1/Tree1
-        - /TF1/Tree1/world1
-        - /TF1/Tree1/world1/link_base1
-        - /TF1/Tree1/world1/link_base1/link11
-        - /TF1/Tree1/world1/link_base1/link11/link21
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51/link61
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51/link61/link_eef1
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51/link61/link_eef1/uflite_gripper_link1
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51/link61/link_eef1/camera_link1
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51/link61/link_eef1/camera_link1/camera_right_ir_frame1
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51/link61/link_eef1/camera_link1/camera_color_frame1
-        - /TF1/Tree1/world1/link_base1/link11/link21/link31/link41/link51/link61/link_eef1/camera_link1/camera_depth_frame1
       Splitter Ratio: 0.5
     Tree Height: 368
   - Class: rviz_common/Help
@@ -311,7 +297,7 @@ Visualization Manager:
         Show Robot Collision: false
         Show Robot Visual: true
       Value: true
-      Velocity_Scaling_Factor: 0.1
+      Velocity_Scaling_Factor: 0.4
     - Class: rviz_default_plugins/TF
       Enabled: true
       Frame Timeout: 15
@@ -347,8 +333,6 @@ Visualization Manager:
           Value: true
         link6:
           Value: true
-        link_1:
-          Value: true
         link_base:
           Value: true
         link_eef:
@@ -356,10 +340,6 @@ Visualization Manager:
         link_tcp:
           Value: true
         uflite_gripper_link:
-          Value: true
-        tracking_marker:
-          Value: true
-        tracking_origin:
           Value: true
         world:
           Value: true
@@ -385,8 +365,6 @@ Visualization Manager:
                             camera_depth_frame:
                               camera_depth_optical_frame:
                                 {}
-                              link_1:
-                                {}
                             camera_left_ir_frame:
                               camera_left_ir_optical_frame:
                                 {}
@@ -395,8 +373,6 @@ Visualization Manager:
                                 {}
                           uflite_gripper_link:
                             link_tcp:
-                            tracking_origin:
-                              tracking_marker:
                               {}
       Update Interval: 0
       Value: true
@@ -450,9 +426,9 @@ Window Geometry:
     collapsed: false
   MotionPlanning - Trajectory Slider:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd0000000100000000000002b40000039efc0200000004fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb000000100044006900730070006c006100790073010000003d000001f3000000c900fffffffb0000000800480065006c0070000000029a0000006e0000006e00fffffffc00000236000001a50000019a0100001cfa000000000100000002fb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e00670100000000ffffffff000001f300fffffffb0000000a005600690065007700730100000000000002b40000010000ffffff000007460000039e00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000100000000000002b40000039efc0200000004fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb000000100044006900730070006c006100790073010000003d000001f3000000c900fffffffb0000000800480065006c0070000000029a0000006e0000006e00fffffffc00000236000001a50000019a0100001cfa000000000100000002fb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e00670100000000ffffffff000001f300fffffffb0000000a005600690065007700730100000000000002b40000010000ffffff000004c60000039e00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Views:
     collapsed: false
-  Width: 2560
+  Width: 1920
   X: 0
   Y: 27
