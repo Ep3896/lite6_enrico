@@ -65,7 +65,7 @@ def go_to_position(movx, movy, movz, previous_position, movement_threshold, rota
         pose_goal = Pose()
         pose_goal.position.x = max(movx, 0.1)
         pose_goal.position.y = max(min(movy, 0.3), -0.45)
-        pose_goal.position.z = max(min(movz, 0.45), 0.16)
+        pose_goal.position.z = max(min(movz, 0.45), 0.05) # second argument was 0.16
 
         pose_goal.orientation.x = 1.0
         pose_goal.orientation.y = 0.0

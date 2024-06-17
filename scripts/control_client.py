@@ -12,6 +12,11 @@ from tf2_ros import Buffer, TransformListener, LookupException, ConnectivityExce
 import tf2_geometry_msgs.tf2_geometry_msgs
 import math
 
+
+from moveit.core.robot_model import RobotModel
+from moveit.core.robot_state import RobotState
+
+
 # PID gains
 KP = 0.05
 KI = 0.005 
@@ -19,13 +24,13 @@ KD = 0.01 #ERA 0.02 e andava bene
 
 # Thresholds
 ERROR_THRESHOLD = 0.02  # Meters
-Z_THRESHOLD = 0.02  # Meters
+Z_THRESHOLD = 0.00095  # Meters
 MOVEMENT_THRESHOLD = 0.1  # Maximum allowed movement in meters
 
 # Camera controller class
 class CameraController:
     def __init__(self):
-        self.position = Point(x=0.0, y=0.0, z=0.0)
+        self.position = Point(x=0.3106, y=0.017492, z=0.44321)
         # PID controllers for x, y, z
         self.pid_x = PID(KP, KI, KD)
         self.pid_y = PID(KP, KI, KD)
@@ -129,23 +134,42 @@ class ControllerNode(Node):
         err_y = self.target_position.y - self.camera_controller.position.y
         err_z = self.target_position.z - self.camera_controller.position.z
 
-        self.get_logger().info(f'Position errors: [x: {err_x}, y: {err_y}, z: {err_z}]')
-        self.get_logger().error(f'Target position: [x: {self.target_position.x}, y: {self.target_position.y}, z: {self.target_position.z}]')
+        #self.get_logger().info(f'Position errors: [x: {err_x}, y: {err_y}, z: {err_z}]')
+        #self.get_logger().error(f'Target position: [x: {self.target_position.x}, y: {self.target_position.y}, z: {self.target_position.z}]')
+        print('camera position z:', self.camera_controller.position.z)
+        print('Target position z:', self.target_position.z)
+        self.get_logger().warn(f'z error: {err_z}')
 
         # Stop timer if position errors fall below threshold
-        if abs(err_z) < Z_THRESHOLD and abs(err_x) < ERROR_THRESHOLD and abs(err_y) < ERROR_THRESHOLD and self.target_position.x > 0.05 and self.target_position.y >0.05 and self.target_position.z > 0.05:
+        #if abs(err_z) < Z_THRESHOLD and abs(err_x) < ERROR_THRESHOLD and abs(err_y) < ERROR_THRESHOLD and self.target_position.x > 0.05 and abs(self.target_position.y) > 0.05 and abs(self.target_position.z) > 0.15:
+        if abs(err_z) < Z_THRESHOLD:
             self.camera_controller_timer.cancel()
             self.get_logger().info("Reached target position")
             # Publish the rotation flag
             rotation_flag_msg = Bool()
             rotation_flag_msg.data = True
             self.rotation_flag_publisher.publish(rotation_flag_msg)
-            rclpy.destroy_node(self)
+            rclpy.shutdown()    # Shutdown the node !!!
             return
 
+
+        
         # Update camera position according to control law
         self.camera_controller.update_position()
         #self.get_logger().info(self.camera_controller.log())
+        ##############################################################
+        # Instantiate a RobotState from the robot model
+        #robot_model = lite6.get_robot_model()
+        #robot_state = RobotState(robot_model)
+
+        # Set variables
+        #reference_point_position = [0.0,0.0,0.0]
+        #jacobian = []
+        #joint_values = []
+
+
+
+        ##############################################################
 
         # Build and publish updated goal message
         goal_x = self.camera_controller.position.x
