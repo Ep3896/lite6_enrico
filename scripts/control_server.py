@@ -101,6 +101,7 @@ class GoToPoseActionServer(Node):
         self.pid_z.setpoint = goal.position.z
 
         print("                        ")
+        print("                        ")
         print("++++++++Goal position+++++:", goal.position)
 
         updated_camera_position = self.go_to_position(goal.position.x, goal.position.y, goal.position.z)
