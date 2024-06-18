@@ -111,6 +111,9 @@ class ControllerNode(Node):
         if result.success:
             print('Goal succeeded!')
             self.updated_camera_position = result.updated_camera_position.position
+            print("          ")
+            print("          ")
+            print("Updated camera position:", self.updated_camera_position)
             #if self.updated_camera_position.z < Z_THRESHOLD:
             #    self.get_logger().info("Stopping: Camera position z component is less than threshold")
             #    self.shutdown_flag = True

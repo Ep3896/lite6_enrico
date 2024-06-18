@@ -10,6 +10,7 @@ from geometry_msgs.msg import Pose, Point
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy
 from moveit.planning import MultiPipelinePlanRequestParameters
+from moveit.planning import PlanRequestParameters
 import numpy as np
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
@@ -17,24 +18,65 @@ from std_msgs.msg import Bool
 import os
 from math import pi, sqrt
 from simple_pid import PID
+import math
+from moveit.core.kinematic_constraints import construct_joint_constraint
+from moveit_msgs.msg import Constraints, JointConstraint
+
+
+
 
 # PID gains
 KP = 0.5 #0.05 seems correct, 
-KI = 0.005 
-KD = 0.01
+KI = 0.05 # 0.005 seems correct 
+KD = 0.05
 
 # Maximum movement threshold
-MAX_MOVEMENT_THRESHOLD = 1.0  # Meters
+MAX_MOVEMENT_THRESHOLD = 0.1  # Meters
 
 # Plan and execute function
 def plan_and_execute(robot, planning_component, logger, single_plan_parameters=None, multi_plan_parameters=None, sleep_time=0.0):
     logger.info("Planning trajectory")
+
+    constraints = Constraints()
+    constraints.name = "joints_constraints"
+
+    joint_5_contraint = JointConstraint()
+    joint_5_contraint.joint_name = "joint5"
+    joint_5_contraint.position = 1.363802  # 90 degrees in radians
+    joint_5_contraint.tolerance_above = 2.5
+    joint_5_contraint.tolerance_below = 2.5
+    joint_5_contraint.weight = 1.0
+
+    constraints.joint_constraints.append(joint_5_contraint)
+
+    joint_4_contraint = JointConstraint()
+    joint_4_contraint.joint_name = "joint4"
+    joint_4_contraint.position = 0.000010 #0.0  
+    joint_4_contraint.tolerance_above = 2.5
+    joint_4_contraint.tolerance_below = 2.5
+    joint_4_contraint.weight = 1.0
+
+    constraints.joint_constraints.append(joint_4_contraint)
+
+    joint_6_contraint = JointConstraint()
+    joint_6_contraint.joint_name = "joint6"
+    joint_6_contraint.position = 0.0
+    joint_6_contraint.tolerance_above = 2.5
+    joint_6_contraint.tolerance_below = 2.5
+    joint_6_contraint.weight = 1.0
+
+    constraints.joint_constraints.append(joint_6_contraint)
+    
+    planning_component.set_path_constraints(constraints)
+
+
     if multi_plan_parameters is not None:
         plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)
     elif single_plan_parameters is not None:
         plan_result = planning_component.plan(single_plan_parameters=single_plan_parameters)
     else:
         plan_result = planning_component.plan()
+    
 
     if plan_result:
         logger.info("Executing plan")
@@ -97,14 +139,14 @@ class GoToPoseActionServer(Node):
 
         # Set PID setpoints to the goal positions
         self.pid_x.setpoint = goal.position.x
-        self.pid_y.setpoint = goal.position.y
+        self.pid_y.setpoint = goal.position.y 
         self.pid_z.setpoint = goal.position.z
 
         print("                        ")
         print("                        ")
         print("++++++++Goal position+++++:", goal.position)
 
-        updated_camera_position = self.go_to_position(goal.position.x, goal.position.y, goal.position.z)
+        updated_camera_position = self.go_to_position(goal.position.x, goal.position.y + 0.2, goal.position.z)
 
         print("                        ")
         print("Updated camera position:", updated_camera_position)
@@ -124,19 +166,21 @@ class GoToPoseActionServer(Node):
         plan = False
         planning_scene_monitor = self.lite6.get_planning_scene_monitor()
         updated_camera_position = None
+        robot_state = RobotState(self.lite6.get_robot_model())
 
         with planning_scene_monitor.read_write() as scene:
-            robot_state = scene.current_state
-            original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+            robot_state = scene.current_state # Get the current state of the robot, including the joint values. 
+                                              #This is the state of the robot at the time of the last update of the planning scene
+            original_joint_positions = robot_state.get_joint_group_positions("lite6_arm") # Get the joint positions of the robot
             
-            self.lite6_arm.set_start_state_to_current_state()
-            check_init_pose = robot_state.get_pose("camera_depth_frame")
+            self.lite6_arm.set_start_state_to_current_state() # Set the START STATE of the robot to the current state of the robot
+            check_init_pose = robot_state.get_pose("camera_depth_frame") # Get the pose of the camera_depth_frame
 
             # PID control
-            current_position = check_init_pose.position
-            velocity_x = self.pid_x(current_position.x)
-            velocity_y = self.pid_y(current_position.y)
-            velocity_z = self.pid_z(current_position.z)
+            current_position = check_init_pose.position # Get the position of the camera_depth_frame
+            velocity_x = self.pid_x(current_position.x) # Get the velocity of the camera_depth_frame in the x direction
+            velocity_y = self.pid_y(current_position.y) # Get the velocity of the camera_depth_frame in the y direction
+            velocity_z = self.pid_z(current_position.z) # Get the velocity of the camera_depth_frame in the z direction
 
             # Compute the new position
             movx = current_position.x + velocity_x * self.pid_x.sample_time
@@ -148,18 +192,18 @@ class GoToPoseActionServer(Node):
             dist_y = abs(movy - self.previous_position.y)
             dist_z = abs(movz - self.previous_position.z)
             
-            if dist_x > MAX_MOVEMENT_THRESHOLD:
+            if dist_x > 2*MAX_MOVEMENT_THRESHOLD:
                 movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD)
             
-            if dist_y > MAX_MOVEMENT_THRESHOLD:
+            if dist_y > 2*MAX_MOVEMENT_THRESHOLD:
                 movy = self.previous_position.y + (MAX_MOVEMENT_THRESHOLD if movy > self.previous_position.y else -MAX_MOVEMENT_THRESHOLD)
             
-            if dist_z > MAX_MOVEMENT_THRESHOLD:
+            if dist_z > MAX_MOVEMENT_THRESHOLD/4:
                 movz = self.previous_position.z + (MAX_MOVEMENT_THRESHOLD if movz > self.previous_position.z else -MAX_MOVEMENT_THRESHOLD)
 
             # Clipping the movement within specified boundaries
-            movx = min(max(movx, 0.1), 0.45)
-            movy = min(max(movy, -0.3), 0.3)
+            movx = min(max(movx, 0.2), 0.45) # 0.1 was fine for the x axis
+            movy = min(max(movy, -0.3), 0.3) 
             movz = min(max(movz, 0.05), 0.40)
 
             pose_goal = Pose()
@@ -172,22 +216,27 @@ class GoToPoseActionServer(Node):
             pose_goal.orientation.z = 0.0
             pose_goal.orientation.w = 0.7
 
-            #print("Pose goal:", pose_goal)
+            #print("Pose goal:", pose_goal) 
+            #robot_state = RobotState(self.lite6.get_robot_model())
 
-
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=1.0)
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=1.0) # Set the robot state from the inverse kinematics solution                                                                                                     # The robot state is set to the pose goal, this state is the goal state
             if not result:
                 self._logger.error("IK solution was not found!")
                 self._logger.error(f"Failed goal is: {pose_goal}")
             else:
-                self._logger.info("IK solution found!")
+                #self._logger.info("IK solution found!")
+                print("                        ")
+                self._logger.error(f"Valid goal is: {pose_goal}")
+                print("                        ")   
                 plan = True
-                self.lite6_arm.set_goal_state(robot_state=robot_state)
-                robot_state.update()
+
+
+                self.lite6_arm.set_goal_state(robot_state=robot_state) # set the GOAL STATE of the robot to the goal state
+                robot_state.update() # Update the robot state, this will update the robot state to the goal state
                 check_updated_pose = robot_state.get_pose("camera_depth_frame")
                 print("New_pose:", check_updated_pose)
-                robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
-                robot_state.update()
+                robot_state.set_joint_group_positions("lite6_arm", original_joint_positions) # Set the joint group positions of the robot to the original joint positions
+                robot_state.update() 
 
         if plan:
             plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
