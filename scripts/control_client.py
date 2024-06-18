@@ -72,12 +72,13 @@ class ControllerNode(Node):
     def send_goal(self, target_position: Point):
         goal_msg = GoToPose.Goal()
         goal_msg.pose.position = target_position
-        goal_msg.pose.orientation.x = 1.0  # Assuming a default orientation
-        goal_msg.pose.orientation.y = 0.0  # Assuming a default orientation
+        
+        goal_msg.pose.orientation.x = 0.0  # Assuming a default orientation
+        goal_msg.pose.orientation.y = 0.7  # Assuming a default orientation
         goal_msg.pose.orientation.z = 0.0  # Assuming a default orientation
-        goal_msg.pose.orientation.w = 0.0  # Assuming a default orientation
-
-        self._action_client.wait_for_server(timeout_sec=2.0)
+        goal_msg.pose.orientation.w = 0.7  # Assuming a default orientation
+        
+        self._action_client.wait_for_server() # Wait for the server to be up
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
 
