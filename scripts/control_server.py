@@ -205,7 +205,7 @@ class GoToPoseActionServer(Node):
             # Clipping the movement within specified boundaries
             movx = min(max(movx, 0.2), 0.45) # 0.1 was fine for the x axis
             movy = min(max(movy, -0.3), 0.3) 
-            movz = min(max(movz, 0.13), 0.40)
+            movz = min(max(movz, 0.13), 0.40) # 0.13 was fine for the z axis, it is the minimum height of the camera_depth_frame beacuse 0.15, in the other node, is the average heigh that has to be reached to end the task.
 
             pose_goal = Pose()
             pose_goal.position.x = movx
@@ -220,7 +220,21 @@ class GoToPoseActionServer(Node):
             #print("Pose goal:", pose_goal) 
             #robot_state = RobotState(self.lite6.get_robot_model())
 
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=1.0) # Set the robot state from the inverse kinematics solution                                                                                                     # The robot state is set to the pose goal, this state is the goal state
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_depth_frame", timeout=1.0) # Set the robot state from the inverse kinematics solution
+
+            # I added this to check if the robot is in collision, the problem is a segmentation fault, could it be that requires more time to check for collision? maybe time sleep is insufficient
+
+            robot_collision_status = scene.is_state_colliding(
+            robot_state=robot_state, joint_model_group_name="panda_arm", verbose=True
+                                                            )
+            self._logger.info(f"\nRobot is in collision: {robot_collision_status}\n")
+
+            
+
+            if robot_collision_status == True:
+                time.sleep(0.5)
+                return
+                                                                                                         # The robot state is set to the pose goal, this state is the goal state
             if not result:
                 self._logger.error("IK solution was not found!")
                 self._logger.error(f"Failed goal is: {pose_goal}")
