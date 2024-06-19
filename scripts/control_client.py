@@ -19,10 +19,9 @@ class ControllerNode(Node):
 
     def __init__(self):
         super().__init__("camera_control_node")
-        
 
         # Subscriber for desired goal
-        self.create_subscription(MarkerArray, '/yolo/dgb_bb_markers', self.detection_callback, 30) 
+        self.create_subscription(MarkerArray, '/yolo/dgb_bb_markers', self.detection_callback, 30)
 
         # Publisher for rotation flag
         self.rotation_flag_publisher = self.create_publisher(Bool, 'rotation_flag', 10)
@@ -37,13 +36,15 @@ class ControllerNode(Node):
 
         # Timer to send goals periodically
         self.goal_timer = self.create_timer(0.033, self.timer_callback)  # Adjust the interval as needed
-        
 
         # Variables for control loop
         self.updated_camera_position = None
 
         # Shutdown flag
         self.shutdown_flag = False
+
+        # Error Z buffer
+        self.error_z_buffer = []
 
     def detection_callback(self, msg: MarkerArray):
         if msg.markers:
@@ -60,7 +61,6 @@ class ControllerNode(Node):
 
                 # Update the target position for the timer callback
                 self.target_position.position = world_point
-                
 
             except (LookupException, ConnectivityException, ExtrapolationException) as e:
                 self.get_logger().error(f'Could not transform point: {e}')
@@ -72,28 +72,15 @@ class ControllerNode(Node):
     def send_goal(self, target_position: Point):
         goal_msg = GoToPose.Goal()
         goal_msg.pose.position = target_position
-        
+
         goal_msg.pose.orientation.x = 0.0  # Assuming a default orientation
         goal_msg.pose.orientation.y = 0.7  # Assuming a default orientation
         goal_msg.pose.orientation.z = 0.0  # Assuming a default orientation
         goal_msg.pose.orientation.w = 0.7  # Assuming a default orientation
-        
-        self._action_client.wait_for_server() # Wait for the server to be up
+
+        self._action_client.wait_for_server(timeout_sec=0.01)  # Wait for the server to be up
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
-
-        # Log the goal in the desired format
-        self.get_logger().info(
-            f"Goal position:\n"
-            f"x: {goal_msg.pose.position.x}\n"
-            f"y: {goal_msg.pose.position.y}\n"
-            f"z: {goal_msg.pose.position.z}\n"
-            f"Goal orientation:\n"
-            f"x: {goal_msg.pose.orientation.x}\n"
-            f"y: {goal_msg.pose.orientation.y}\n"
-            f"z: {goal_msg.pose.orientation.z}\n"
-            f"w: {goal_msg.pose.orientation.w}"
-        )
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
@@ -114,11 +101,26 @@ class ControllerNode(Node):
             print("          ")
             print("          ")
             print("Updated camera position:", self.updated_camera_position)
-            #if self.updated_camera_position.z < Z_THRESHOLD:
-            #    self.get_logger().info("Stopping: Camera position z component is less than threshold")
-            #    self.shutdown_flag = True
-        else:
-            self.get_logger().info('Goal failed!')
+
+            # Calculate error_z
+            error_z = self.updated_camera_position.z - self.target_position.position.z
+            print("\033[91m" + "Error: ", error_z)
+
+            # Update the error_z_buffer
+            self.update_error_z_buffer(error_z)
+
+            # Check if the buffer is full and compute the mean
+            if len(self.error_z_buffer) == 40:
+                mean_error_z = sum(self.error_z_buffer) / len(self.error_z_buffer)
+                print("\033[93m" + "Mean Error Z: ", mean_error_z)
+                if 0.1500 <= mean_error_z <= 0.1501:
+                    self.get_logger().info("Stopping: Mean Error Z is within the threshold")
+                    self.shutdown_flag = True
+
+    def update_error_z_buffer(self, error_z):
+        if len(self.error_z_buffer) >= 40:
+            self.error_z_buffer.pop(0)
+        self.error_z_buffer.append(error_z)
 
 def main(args=None):
     rclpy.init(args=args)

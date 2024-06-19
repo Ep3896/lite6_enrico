@@ -26,15 +26,15 @@ from moveit_msgs.msg import Constraints, JointConstraint
 
 
 # PID gains
-KP = 0.5 #0.05 seems correct, 
-KI = 0.05 # 0.005 seems correct 
-KD = 0.05
+KP = 0.1 #0.05 seems correct, 
+KI = 0.01 # 0.005 seems correct 
+KD = 0.01
 
 # Maximum movement threshold
-MAX_MOVEMENT_THRESHOLD = 0.1  # Meters
+MAX_MOVEMENT_THRESHOLD = 1.0  # Meters
 
 # Plan and execute function
-def plan_and_execute(robot, planning_component, logger, single_plan_parameters=None, multi_plan_parameters=None, sleep_time=0.0):
+def plan_and_execute(robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None):
     logger.info("Planning trajectory")
 
     constraints = Constraints()
@@ -84,6 +84,7 @@ def plan_and_execute(robot, planning_component, logger, single_plan_parameters=N
         robot.execute(robot_trajectory, controllers=[])
     else:
         logger.error("Planning failed")
+        time.sleep(0.5)
 
     time.sleep(sleep_time)
 
@@ -146,7 +147,7 @@ class GoToPoseActionServer(Node):
         print("                        ")
         print("++++++++Goal position+++++:", goal.position)
 
-        updated_camera_position = self.go_to_position(goal.position.x, goal.position.y + 0.2, goal.position.z)
+        updated_camera_position = self.go_to_position(goal.position.x, goal.position.y + 0.25, goal.position.z) # 0.25 was added to the y position as offset
 
         print("                        ")
         print("Updated camera position:", updated_camera_position)
@@ -183,9 +184,9 @@ class GoToPoseActionServer(Node):
             velocity_z = self.pid_z(current_position.z) # Get the velocity of the camera_depth_frame in the z direction
 
             # Compute the new position
-            movx = current_position.x + velocity_x * self.pid_x.sample_time
-            movy = current_position.y + velocity_y * self.pid_y.sample_time
-            movz = current_position.z + velocity_z * self.pid_z.sample_time
+            movx = current_position.x + 5*velocity_x * self.pid_x.sample_time  # increase the velocity by 3 times, added by myself
+            movy = current_position.y + 5*velocity_y * self.pid_y.sample_time
+            movz = current_position.z + 5*velocity_z * self.pid_z.sample_time
 
             # Ensure the new position is within the movement threshold
             dist_x = abs(movx - self.previous_position.x)
@@ -198,13 +199,13 @@ class GoToPoseActionServer(Node):
             if dist_y > 2*MAX_MOVEMENT_THRESHOLD:
                 movy = self.previous_position.y + (MAX_MOVEMENT_THRESHOLD if movy > self.previous_position.y else -MAX_MOVEMENT_THRESHOLD)
             
-            if dist_z > MAX_MOVEMENT_THRESHOLD/4:
+            if dist_z > MAX_MOVEMENT_THRESHOLD/2:
                 movz = self.previous_position.z + (MAX_MOVEMENT_THRESHOLD if movz > self.previous_position.z else -MAX_MOVEMENT_THRESHOLD)
 
             # Clipping the movement within specified boundaries
             movx = min(max(movx, 0.2), 0.45) # 0.1 was fine for the x axis
             movy = min(max(movy, -0.3), 0.3) 
-            movz = min(max(movz, 0.05), 0.40)
+            movz = min(max(movz, 0.13), 0.40)
 
             pose_goal = Pose()
             pose_goal.position.x = movx
@@ -239,7 +240,7 @@ class GoToPoseActionServer(Node):
                 robot_state.update() 
 
         if plan:
-            plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+            plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.1)
             updated_camera_position = robot_state.get_pose("camera_depth_frame").position
             print("                        ")
             print("Updated camera position after plan:", updated_camera_position)
