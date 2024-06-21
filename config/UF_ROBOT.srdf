@@ -39,6 +39,14 @@
         <joint name="joint5" value="2.0"/>
         <joint name="joint6" value="0"/>
     </group_state>
+    <group_state name="CameraSearching" group="lite6_arm">
+        <joint name="joint1" value="0"/>
+        <joint name="joint2" value="0.297"/>
+        <joint name="joint3" value="0.873"/>
+        <joint name="joint4" value="-1.745"/>
+        <joint name="joint5" value="-0.960"/>
+        <joint name="joint6" value="-1.047"/>
+    </group_state>
 
     <!--END EFFECTOR: Purpose: Represent information about an end effector.-->
     <end_effector name="link_tcp" parent_link="uflite_gripper_link" group="uflite_gripper"/>
