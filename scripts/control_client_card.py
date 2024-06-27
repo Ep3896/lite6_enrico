@@ -11,9 +11,10 @@ from cv_bridge import CvBridge, CvBridgeError
 import numpy as np
 import pyrealsense2 as rs2
 from simple_pid import PID
-import threading
 import tf2_ros
 import tf2_geometry_msgs
+import os
+import sys
 
 # PID gain values
 KP = 0.0001
@@ -38,12 +39,15 @@ class ControllerNode(Node):
 
         self.new_target = False
         self.base_position = Point(x=0.30104, y=0.017488, z=0.44326)
+        self.goal_handle = None
 
         # Variables for control loop
         self.intrinsics = None
         self.pix = None
         self.depth_image = None
-        #self.target_position = Point(x=0.30104, y=0.017488, z=0.44326)
+        self.line = None
+        self.pix_grade = None
+        self.bounding_box_center = []
         self.target_position = Point(x=0.0, y=0.0, z=0.0)
         self.bridge = CvBridge()
 
@@ -63,7 +67,7 @@ class ControllerNode(Node):
         self.clip_val = 30.0
 
         self.shutdown_flag = False
-        self.pick_card = True # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
+        self.pick_card = False  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
 
         # TF2 buffer and listener
         self.tf_buffer = tf2_ros.Buffer()
@@ -73,12 +77,14 @@ class ControllerNode(Node):
 
     def detections_callback(self, msg: DetectionArray):
         for detection in msg.detections:
-            if detection.class_name == 'CreditCard': # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
+            if detection.class_name == 'POS':  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
                 self.process_detection(detection)
 
     def process_detection(self, detection):
         bbox_center_x = detection.bbox.center.position.x
         bbox_center_y = detection.bbox.center.position.y
+
+        self.bounding_box_center = [bbox_center_x, bbox_center_y]
 
         self.get_logger().info(f'Bounding Box Center: X: {bbox_center_x}, Y: {bbox_center_y}')
 
@@ -91,10 +97,8 @@ class ControllerNode(Node):
         error_y = max(min(error_y, self.clip_val), -self.clip_val)
 
         # Convert pixel error to camera frame using intrinsic parameters
-        spatial_error_x = 1000*error_x / self.intrinsics.fx if self.intrinsics else 0.0
-        spatial_error_y = 1000*error_y / self.intrinsics.fy if self.intrinsics else 0.0
-
-        #print(f'\n intrinsic fx: {self.intrinsics.fx} \n intrinsic fy: {self.intrinsics.fy} \n')
+        spatial_error_x = 1000 * error_x / self.intrinsics.fx if self.intrinsics else 0.0
+        spatial_error_y = 1000 * error_y / self.intrinsics.fy if self.intrinsics else 0.0
 
         print(f'\n spatial_error_x: {spatial_error_x} \n spatial_error_y: {spatial_error_y} \n')
 
@@ -113,39 +117,47 @@ class ControllerNode(Node):
 
             print(f'\n world_error_point: {world_error_point} \n')
 
-            # Update the target position for the servoing
-            #self.target_position.x += world_error_point.x
-            #self.target_position.y += world_error_point.y
-            
-            # This is an error because the target_position continues to updated itself whereas it should be updated only once
-            self.target_position.x = 0.578 - world_error_point.x # this is not clear why it is mirrored but it was necessary
-            self.target_position.y = -world_error_point.y # y axis was inverted, need to check possible boundary problems
+            # Update the target position for the servoing ( THIS IS NOT A ROBUST SOLUTION, IT IS JUST USEFUL WHEN THE CAMERA POINTS DOWNWARDS)
+            self.target_position.x = 0.578 - world_error_point.x  # this is not clear why it is mirrored but it was necessary
+            self.target_position.y = -world_error_point.y  # y axis was inverted, need to check possible boundary problems
 
             # Use depth information for Z-axis adjustment if available
             if self.pix and self.depth_image is not None:
                 depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
-                self.target_position.z = depth_adjustment
+                self.target_position.z = depth_adjustment / 1000.0  # Convert to meters
 
             self.get_logger().info(f'Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
 
-            self.send_goal(self.target_position)
+            if self.target_position.z > 0.2:
+                self.send_goal(self.target_position)
+            else:
+                self.get_logger().info('Target position is too close, stopping movement.')
+                self.stop_movement()
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             self.get_logger().error(f'TF2 Error: {e}')
 
     def depth_at_pixel(self, x, y):
         if self.intrinsics and self.depth_image is not None:
-            depth = self.depth_image[y, x]
-            result = rs2.rs2_deproject_pixel_to_point(self.intrinsics, [x, y], depth)
-            return result[2]  # Z-coordinate in camera space
+            if 0 <= y < self.depth_image.shape[0] and 0 <= x < self.depth_image.shape[1]:  # Boundary check
+                depth = self.depth_image[int(y), int(x)]
+                result = rs2.rs2_deproject_pixel_to_point(self.intrinsics, [x, y], depth)
+                self.line += '  Coordinate: %8.2f %8.2f %8.2f.' % (result[0], result[1], result[2])
+                if self.pix_grade is not None:
+                    self.line += ' Grade: %2d' % self.pix_grade
+                self.line += '\r'
+                sys.stdout.write(self.line)
+                sys.stdout.flush()
+                return result[2]  # Z-coordinate in camera space
         return self.target_position.z
 
     def depth_image_callback(self, data):
         try:
             self.depth_image = self.bridge.imgmsg_to_cv2(data, data.encoding)
-            indices = np.array(np.where(self.depth_image == self.depth_image[self.depth_image > 0].min()))[:,0]
-            self.pix = (indices[1], indices[0])
-
+            if self.bounding_box_center:
+                self.pix = (int(self.bounding_box_center[0]), int(self.bounding_box_center[1]))
+                if self.pix[0] < self.depth_image.shape[1] and self.pix[1] < self.depth_image.shape[0]:  # Boundary check
+                    self.line = '\rDepth at pixel(%3d, %3d): %7.1f(mm).' % (self.pix[0], self.pix[1], self.depth_image[self.pix[1], self.pix[0]])
         except CvBridgeError as e:
             self.get_logger().error(f'CvBridge Error: {e}')
             return
@@ -181,32 +193,19 @@ class ControllerNode(Node):
         goal_msg.pose.position = target_position
 
         if not self.pick_card:
-            """
-            goal_msg.pose.orientation.x = 0.0
-            goal_msg.pose.orientation.y = 0.7
-            goal_msg.pose.orientation.z = 0.0
-            goal_msg.pose.orientation.w = 0.7
-            """
             # POS picking orientation for the POS (camera_color_optical_frame)
             goal_msg.pose.orientation.x = -0.70388
             goal_msg.pose.orientation.y = 0.70991
             goal_msg.pose.orientation.z = -0.015868
             goal_msg.pose.orientation.w = 0.018082
-            #self.get_logger().info("Working with CreditCard")
         else:
-            """
-            goal_msg.pose.orientation.x = 0.69237
-            goal_msg.pose.orientation.y = 0.30768
-            goal_msg.pose.orientation.z = -0.55548
-            goal_msg.pose.orientation.w = -0.34263
-            """
-            # POS picking orientation for the POS (camera_color_optical_frame)
+            # Credit Card picking orientation for the Credit Card (camera_color_optical_frame)
             goal_msg.pose.orientation.x = 0.64135
             goal_msg.pose.orientation.y = 0.6065
             goal_msg.pose.orientation.z = 0.3936
             goal_msg.pose.orientation.w = -0.25673
 
-            self.get_logger().info("Working with CreditCard")
+            # self.get_logger().info("Working with CreditCard")
 
         self._action_client.wait_for_server(timeout_sec=0.033)
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
@@ -219,6 +218,7 @@ class ControllerNode(Node):
             return
 
         self.get_logger().info('Goal accepted :)')
+        self.goal_handle = goal_handle  # Store the goal handle
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.get_result_callback)
 
@@ -228,6 +228,16 @@ class ControllerNode(Node):
             self.get_logger().info('Goal succeeded!')
             self.new_target = True
             self.updated_camera_position = result.updated_camera_position.position
+
+    def stop_movement(self):
+        if self.goal_handle is not None:
+            cancel_future = self.goal_handle.cancel_goal_async()
+            cancel_future.add_done_callback(self.cancel_done_callback)
+
+    def cancel_done_callback(self, future):
+        cancel_response = future.result()
+        if cancel_response:
+            self.get_logger().info('Goal cancelled successfully')
 
 def main(args=None):
     rclpy.init(args=args)

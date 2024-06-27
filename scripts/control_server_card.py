@@ -23,7 +23,9 @@ from visualization_msgs.msg import MarkerArray
 from yolov8_msgs.msg import DetectionArray
 
 # Maximum movement threshold
-MAX_MOVEMENT_THRESHOLD = 0.01  # Meters
+MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
+DEPTH_DISTANCE_STEP = 0.025
+MINIMUM_DEPTH_DISTANCE = 0.1
 
 # Plan and execute function
 def plan_and_execute(robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
@@ -61,6 +63,7 @@ class GoToPoseActionServer(Node):
         self._logger = get_logger("go_to_pose_action_server")
 
         self.previous_position = Point(x=0.30104, y=0.017546, z=0.44321) # ---------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.30 is for ready pose)
+        #self.previous_position = Point(x=0.20753, y=0.059771, z=0.20679)
 
         moveit_config = (
             MoveItConfigsBuilder(robot_name="UF_ROBOT", package_name="lite6_enrico")
@@ -112,8 +115,12 @@ class GoToPoseActionServer(Node):
             # Compute the new position
             movx = check_init_pose.position.x + (movx - self.previous_position.x)
             movy = check_init_pose.position.y + (movy - self.previous_position.y)
-            #movz = check_init_pose.position.z + (movz - self.previous_position.z)
-            movz = check_init_pose.position.z - 0.005
+
+            # Update movz conditionally
+            if movz > 0.2:
+                movz = check_init_pose.position.z - DEPTH_DISTANCE_STEP
+            else:
+                movz = check_init_pose.position.z
 
             # Ensure the new position is within the movement threshold
             dist_x = abs(movx - self.previous_position.x)
@@ -132,7 +139,7 @@ class GoToPoseActionServer(Node):
             # Clipping the movement within specified boundaries
             movx = min(max(movx, 0.2), 0.45)
             movy = min(max(movy, -0.3), 0.5)
-            movz = min(max(movz, 0.13), 0.40)
+            movz = min(max(movz, MINIMUM_DEPTH_DISTANCE), 0.40)
 
             pose_goal = Pose()
             pose_goal.position.x = movx
@@ -152,7 +159,7 @@ class GoToPoseActionServer(Node):
             constraints = Constraints()
             constraints.name = "joints_constraints"
 
-            if orientation.x == 0.64135: #0.69237:   -------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.64135 is for camera_color_optical_frame)
+            if orientation.x == 0.64135:  # 0.69237:   -------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.64135 is for camera_color_optical_frame)
                 joint_4_constraint = JointConstraint()
                 joint_4_constraint.joint_name = "joint4"
                 joint_4_constraint.position = original_joint_positions[3]
@@ -181,34 +188,6 @@ class GoToPoseActionServer(Node):
                 constraints.joint_constraints.append(joint_6_constraint)
 
             else:
-                """
-                joint_5_constraint = JointConstraint()
-                joint_5_constraint.joint_name = "joint5"
-                joint_5_constraint.position = 1.5708
-                joint_5_constraint.tolerance_above = 2.0
-                joint_5_constraint.tolerance_below = 2.0
-                joint_5_constraint.weight = 1.0
-
-                constraints.joint_constraints.append(joint_5_constraint)
-
-                joint_4_constraint = JointConstraint()
-                joint_4_constraint.joint_name = "joint4"
-                joint_4_constraint.position = 0.000010
-                joint_4_constraint.tolerance_above = 2.0
-                joint_4_constraint.tolerance_below = 2.0
-                joint_4_constraint.weight = 1.0
-
-                constraints.joint_constraints.append(joint_4_constraint)
-
-                joint_6_constraint = JointConstraint()
-                joint_6_constraint.joint_name = "joint6"
-                joint_6_constraint.position = 0.0
-                joint_6_constraint.tolerance_above = 2.0
-                joint_6_constraint.tolerance_below = 2.0
-                joint_6_constraint.weight = 1.0
-
-                constraints.joint_constraints.append(joint_6_constraint)
-                """
                 joint_4_constraint = JointConstraint()
                 joint_4_constraint.joint_name = "joint4"
                 joint_4_constraint.position = original_joint_positions[3]
