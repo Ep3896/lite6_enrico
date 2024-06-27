@@ -25,7 +25,9 @@ from yolov8_msgs.msg import DetectionArray
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
 DEPTH_DISTANCE_STEP = 0.025
-MINIMUM_DEPTH_DISTANCE = 0.1
+MINIMUM_DEPTH_DISTANCE = 0.2
+MIN_DISTANCE_FROM_OBJECT = 0.15
+
 
 # Plan and execute function
 def plan_and_execute(robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
@@ -117,10 +119,11 @@ class GoToPoseActionServer(Node):
             movy = check_init_pose.position.y + (movy - self.previous_position.y)
 
             # Update movz conditionally
-            if movz > 0.2:
+            if movz > MIN_DISTANCE_FROM_OBJECT: #################################################à
                 movz = check_init_pose.position.z - DEPTH_DISTANCE_STEP
             else:
                 movz = check_init_pose.position.z
+                rclpy.shutdown()
 
             # Ensure the new position is within the movement threshold
             dist_x = abs(movx - self.previous_position.x)

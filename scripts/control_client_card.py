@@ -20,6 +20,8 @@ import sys
 KP = 0.0001
 KI = 0.00005
 KD = 0.0001
+# Minimum distance to the object to be reached
+MIN_Z_DISTANCE = 0.05
 
 class ControllerNode(Node):
 
@@ -118,21 +120,35 @@ class ControllerNode(Node):
             print(f'\n world_error_point: {world_error_point} \n')
 
             # Update the target position for the servoing ( THIS IS NOT A ROBUST SOLUTION, IT IS JUST USEFUL WHEN THE CAMERA POINTS DOWNWARDS)
-            self.target_position.x = 0.578 - world_error_point.x  # this is not clear why it is mirrored but it was necessary
-            self.target_position.y = -world_error_point.y  # y axis was inverted, need to check possible boundary problems
+            if not self.pick_card:
+                self.target_position.x = 0.578 - world_error_point.x  # this is not clear why it is mirrored but it was necessary
+                self.target_position.y = -world_error_point.y  # y axis was inverted, need to check possible boundary problems
+            else:
+                self.target_position.x = 0.5 - world_error_point.x
+                self.target_position.y = -world_error_point.y
 
             # Use depth information for Z-axis adjustment if available
-            if self.pix and self.depth_image is not None:
-                depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
-                self.target_position.z = depth_adjustment / 1000.0  # Convert to meters
+            if not self.pick_card: # POS reaching
+                if self.pix and self.depth_image is not None:
+                    depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
+                    if  depth_adjustment/1000 > MIN_Z_DISTANCE:
+                        self.target_position.z = depth_adjustment / 1000.0  # Convert to meters
+                        self.send_goal(self.target_position)
+                        self.get_logger().info(f'POS Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
+                    else:
+                        self.get_logger().info('POS position is too close, stopping movement.')
+                        self.stop_movement()
+            else:                  # Credit Card reaching
+                if self.pix and self.depth_image is not None:
+                    depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
+                    if  1e-6 <= (self.depth_at_pixel(self.pix[0], self.pix[1]))/1000:
+                        self.send_goal(self.target_position)
+                        self.get_logger().info(f'Credit card Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
+                    else:
+                        self.get_logger().info('Credit Card position is too close, stopping movement.')
+                        self.stop_movement()
+                        rclpy.shutdown() # TO REMOVE **************
 
-            self.get_logger().info(f'Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
-
-            if self.target_position.z > 0.2:
-                self.send_goal(self.target_position)
-            else:
-                self.get_logger().info('Target position is too close, stopping movement.')
-                self.stop_movement()
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             self.get_logger().error(f'TF2 Error: {e}')
