@@ -31,6 +31,9 @@ MIN_DISTANCE_FROM_OBJECT = 0.15
 
 
 
+
+
+
 # Plan and execute function
 def plan_and_execute(robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
     logger.info("Planning trajectory")
