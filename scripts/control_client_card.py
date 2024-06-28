@@ -3,6 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from std_msgs.msg import Float32
 from geometry_msgs.msg import Point, PointStamped
 from lite6_enrico_interfaces.action import GoToPose
 from yolov8_msgs.msg import DetectionArray
@@ -35,11 +36,16 @@ class ControllerNode(Node):
         self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 10)
         self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 10)
 
+        # Publisher for depth adjustment
+        #self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 10)
+        self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 10)
+
+
         # Action client for sending goal to the action server
         self._action_client = ActionClient(self, GoToPose, 'go_to_pose')
 
         # Timer to send goals periodically
-        self.goal_timer = self.create_timer(0.033, self.timer_callback)
+        self.goal_timer = self.create_timer(0.033, self.timer_callback) # I changed this line, it was 0.033 before  
 
         self.new_target = False
         self.base_position = Point(x=0.30104, y=0.017488, z=0.44326)
@@ -79,8 +85,6 @@ class ControllerNode(Node):
 
         # Depth buffer
         self.depth_buffer = deque(maxlen=BUFFER_SIZE)
-
-        self.stop_movement_flag = False  # Flag to indicate stopping movement
 
         self.get_logger().info("Controller node initialized")
 
@@ -153,25 +157,31 @@ class ControllerNode(Node):
                         self.get_logger().info(f'POS Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
                     else:
                         self.get_logger().info('POS position is too close, stopping movement.')
-                        self.stop_movement()
+                        #self.stop_movement()
             else:  # Credit Card reaching
                 if self.pix and self.depth_image is not None:
                     depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
+                    #print("                              ")
+                    #print("                              ")
+                    #print("                              ")
+                    #print("                              ")
                     print(f'\n depth_adjustment: {depth_adjustment / 1000} \n')
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
+                    #print("                              ")
+                    #print("                              ")
+                    #print("                              ")
+                    #print("                              ")
+
+                    # Publish depth adjustment
+                    msg = Float32()
+                    msg.data = depth_adjustment / 1000
+                    self.depth_adjustment_pub.publish(msg)
+
+
                     self.depth_buffer.append(depth_adjustment / 1000.0)  # Convert to meters and append to buffer
                     if len(self.depth_buffer) == BUFFER_SIZE and np.mean(self.depth_buffer) < 0.1:
                         self.get_logger().info('Credit Card position is too close, stopping movement.')
-                        self.stop_movement()
-                        self.stop_movement_flag = True  # Set flag to stop movement
-                        rclpy.shutdown()
+                        #self.stop_movement()
+                        #rclpy.shutdown()
                     else:
                         self.target_position.y = self.target_position.y + 0.25
                         self.send_goal(self.target_position)
@@ -189,6 +199,20 @@ class ControllerNode(Node):
                 if self.pix_grade is not None:
                     self.line += ' Grade: %2d' % self.pix_grade
                 self.line += '\r'
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print(self.line)
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+
                 sys.stdout.write(self.line)
                 sys.stdout.flush()
                 return result[2]  # Z-coordinate in camera space
@@ -228,7 +252,7 @@ class ControllerNode(Node):
             return
 
     def timer_callback(self):
-        if self.target_position and not self.stop_movement_flag:
+        if self.target_position :
             self.send_goal(self.target_position)
 
     def send_goal(self, target_position: Point):
@@ -250,7 +274,7 @@ class ControllerNode(Node):
 
             # self.get_logger().info("Working with CreditCard")
 
-        self._action_client.wait_for_server(timeout_sec=0.033)
+        self._action_client.wait_for_server(timeout_sec=0.1) # I changed this line, it was 0.033 before
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
 

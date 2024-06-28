@@ -14,7 +14,7 @@ from moveit.planning import PlanRequestParameters
 import numpy as np
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
 import os
 import math
 from moveit.core.kinematic_constraints import construct_joint_constraint
@@ -25,40 +25,14 @@ from yolov8_msgs.msg import DetectionArray
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
 DEPTH_DISTANCE_STEP = 0.025
-MINIMUM_DEPTH_DISTANCE = 0.1
+MINIMUM_DEPTH_DISTANCE = 0.15
 MIN_DISTANCE_FROM_OBJECT = 0.15
 
 
 
-
-
-
-
-# Plan and execute function
-def plan_and_execute(robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
-    logger.info("Planning trajectory")
-
-    if constraints is not None:
-        planning_component.set_path_constraints(constraints)
-
-    if multi_plan_parameters is not None:
-        plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)
-    elif single_plan_parameters is not None:
-        plan_result = planning_component.plan(single_plan_parameters=single_plan_parameters)
-    else:
-        plan_result = planning_component.plan()
-
-    if plan_result:
-        logger.info("Executing plan")
-        robot_trajectory = plan_result.trajectory
-        robot.execute(robot_trajectory, controllers=[])
-    else:
-        logger.error("Planning failed")
-        time.sleep(0.5)
-
-    time.sleep(sleep_time)
-
 class GoToPoseActionServer(Node):
+
+
 
     def __init__(self):
         super().__init__('control_server')
@@ -72,7 +46,11 @@ class GoToPoseActionServer(Node):
         #self.previous_position = Point(x=0.30104, y=0.017546, z=0.44321) # ---------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.30 is for ready pose)
         self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719)
 
-        self.pick_card = True
+        self.create_subscription(Float32, "/control/depth_adjustment", self.depth_adjustment_callback, 10)
+
+        self.pick_card = True # --------------------------------------> NEEED TO CHANGED
+        self.first_movement = True
+        self.distance_from_object = Float32()
 
         moveit_config = (
             MoveItConfigsBuilder(robot_name="UF_ROBOT", package_name="lite6_enrico")
@@ -88,6 +66,35 @@ class GoToPoseActionServer(Node):
         self.lite6 = MoveItPy(node_name="moveit_py", config_dict=moveit_config)
         self.lite6_arm = self.lite6.get_planning_component("lite6_arm")
         self.get_logger().info("Lite6 initialized")
+
+    # Plan and execute function
+    def plan_and_execute(self,robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
+        logger.info("Planning trajectory")
+
+        if constraints is not None:
+            planning_component.set_path_constraints(constraints)
+
+        if multi_plan_parameters is not None:
+            plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)
+        elif single_plan_parameters is not None:
+            plan_result = planning_component.plan(single_plan_parameters=single_plan_parameters)
+        else:
+            plan_result = planning_component.plan()
+
+        if plan_result:
+            logger.info("Executing plan")
+            robot_trajectory = plan_result.trajectory
+            robot.execute(robot_trajectory, controllers=[])
+            self.first_movement = False
+        else:
+            logger.error("Planning failed")
+            time.sleep(0.5)
+        
+        time.sleep(sleep_time)
+
+    def depth_adjustment_callback(self, msg):
+        self.distance_from_object.data= msg.data
+
 
     def execute_callback(self, goal_handle):
         goal = goal_handle.request.pose
@@ -121,43 +128,60 @@ class GoToPoseActionServer(Node):
             self.lite6_arm.set_start_state_to_current_state()
             check_init_pose = robot_state.get_pose("camera_color_optical_frame")
 
-            # Compute the new position
-            movx = check_init_pose.position.x + (movx - self.previous_position.x)
 
-            if movy > MIN_DISTANCE_FROM_OBJECT and self.pick_card:  # For CreditCard
-                movy = check_init_pose.position.y + DEPTH_DISTANCE_STEP
-            else: # For POS object
-                movy = check_init_pose.position.y #+ (movy - self.previous_position.y)
+            if self.first_movement:
+                print("First movement")
+                if not self.pick_card:
+                    movz = 0.15
+                else:
+                    movz = min(movz,0.05)
+                time.sleep(1.0)
+                self.previous_position = check_init_pose.position
 
-            # Update movz conditionally
-            if movz > MIN_DISTANCE_FROM_OBJECT and not self.pick_card: # For Pos object
-                movz = check_init_pose.position.z - DEPTH_DISTANCE_STEP
-            else: #for CreditCard
-                movz = check_init_pose.position.z + (movz - self.previous_position.z)
-                #rclpy.shutdown()
+            else:
+                # Compute the new position
+                movx = check_init_pose.position.x + (movx - self.previous_position.x)
 
-            # Ensure the new position is within the movement threshold
-            dist_x = abs(movx - self.previous_position.x)
-            dist_y = abs(movy - self.previous_position.y)
-            dist_z = abs(movz - self.previous_position.z)
+                distance = movy - check_init_pose.position.y
 
-            if dist_x > MAX_MOVEMENT_THRESHOLD:
-                movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD)
+                if  distance > 0.05 and self.pick_card:  # For CreditCard but this condition does not make any sense
+                    movy = check_init_pose.position.y + DEPTH_DISTANCE_STEP
+                else: # For POS object
+                    movy = check_init_pose.position.y #+ (movy - self.previous_position.y)
+                    #rclpy.shutdown()  
 
-            if dist_y > MAX_MOVEMENT_THRESHOLD:
-                movy = self.previous_position.y + (MAX_MOVEMENT_THRESHOLD if movy > self.previous_position.y else -MAX_MOVEMENT_THRESHOLD)
+                # Update movz conditionally
+                if movz > MIN_DISTANCE_FROM_OBJECT and not self.pick_card: # For Pos object
+                    movz = check_init_pose.position.z - DEPTH_DISTANCE_STEP
+                else: #for CreditCard
+                    movz = check_init_pose.position.z + (movz - self.previous_position.z)
+                    #rclpy.shutdown()
 
-            if dist_z > MAX_MOVEMENT_THRESHOLD / 2:
-                movz = self.previous_position.z + (MAX_MOVEMENT_THRESHOLD if movz > self.previous_position.z else -MAX_MOVEMENT_THRESHOLD)
+                # Ensure the new position is within the movement threshold
+                dist_x = abs(movx - self.previous_position.x)
+                dist_y = abs(movy - self.previous_position.y)
+                dist_z = abs(movz - self.previous_position.z)
+
+                if dist_x > MAX_MOVEMENT_THRESHOLD:
+                    movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD)
+
+                if dist_y > MAX_MOVEMENT_THRESHOLD:
+                    movy = self.previous_position.y + (MAX_MOVEMENT_THRESHOLD if movy > self.previous_position.y else -MAX_MOVEMENT_THRESHOLD)
+
+                if dist_z > MAX_MOVEMENT_THRESHOLD / 2:
+                    movz = self.previous_position.z + (MAX_MOVEMENT_THRESHOLD if movz > self.previous_position.z else -MAX_MOVEMENT_THRESHOLD)
 
             # Clipping the movement within specified boundaries
-            movx = min(max(movx, 0.2), 0.45)
-            movy = min(max(movy, -0.3), 0.5)
-            movz = min(max(movz, MINIMUM_DEPTH_DISTANCE), 0.40)
+            movx = min(max(movx, 0.0), 0.45)
+            movy = min(max(movy, -0.3), 0.45)
+            if not self.pick_card:
+                movz = min(max(movz, MINIMUM_DEPTH_DISTANCE), 0.40)
+            else:
+                movz = min(max(movz, 0.05), 0.40)
 
             pose_goal = Pose()
             pose_goal.position.x = movx
-            pose_goal.position.y = movy
+            pose_goal.position.y = movy 
             pose_goal.position.z = movz
 
             pose_goal.orientation = orientation
@@ -240,7 +264,8 @@ class GoToPoseActionServer(Node):
                 robot_state.update()
 
         if plan:
-            plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, constraints=constraints)
+            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, constraints=constraints)
+            time.sleep(1.0)
             updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
             self.previous_position = updated_camera_position
             return updated_camera_position
