@@ -25,7 +25,7 @@ from yolov8_msgs.msg import DetectionArray
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
 DEPTH_DISTANCE_STEP = 0.025
-MINIMUM_DEPTH_DISTANCE = 0.2
+MINIMUM_DEPTH_DISTANCE = 0.1
 MIN_DISTANCE_FROM_OBJECT = 0.15
 
 
@@ -69,8 +69,10 @@ class GoToPoseActionServer(Node):
             execute_callback=self.execute_callback)
         self._logger = get_logger("go_to_pose_action_server")
 
-        self.previous_position = Point(x=0.30104, y=0.017546, z=0.44321) # ---------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.30 is for ready pose)
-        #self.previous_position = Point(x=0.20753, y=0.059771, z=0.20679)
+        #self.previous_position = Point(x=0.30104, y=0.017546, z=0.44321) # ---------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.30 is for ready pose)
+        self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719)
+
+        self.pick_card = True
 
         moveit_config = (
             MoveItConfigsBuilder(robot_name="UF_ROBOT", package_name="lite6_enrico")
@@ -121,14 +123,18 @@ class GoToPoseActionServer(Node):
 
             # Compute the new position
             movx = check_init_pose.position.x + (movx - self.previous_position.x)
-            movy = check_init_pose.position.y + (movy - self.previous_position.y)
+
+            if movy > MIN_DISTANCE_FROM_OBJECT and self.pick_card:  # For CreditCard
+                movy = check_init_pose.position.y + DEPTH_DISTANCE_STEP
+            else: # For POS object
+                movy = check_init_pose.position.y #+ (movy - self.previous_position.y)
 
             # Update movz conditionally
-            if movz > MIN_DISTANCE_FROM_OBJECT: #################################################à
+            if movz > MIN_DISTANCE_FROM_OBJECT and not self.pick_card: # For Pos object
                 movz = check_init_pose.position.z - DEPTH_DISTANCE_STEP
-            else:
-                movz = check_init_pose.position.z
-                rclpy.shutdown()
+            else: #for CreditCard
+                movz = check_init_pose.position.z + (movz - self.previous_position.z)
+                #rclpy.shutdown()
 
             # Ensure the new position is within the movement threshold
             dist_x = abs(movx - self.previous_position.x)
@@ -167,7 +173,7 @@ class GoToPoseActionServer(Node):
             constraints = Constraints()
             constraints.name = "joints_constraints"
 
-            if orientation.x == 0.64135:  # 0.69237:   -------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.64135 is for camera_color_optical_frame)
+            if orientation.x == 0.64135:  # 0.69237: CreditCard   -------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.64135 is for camera_color_optical_frame)
                 joint_4_constraint = JointConstraint()
                 joint_4_constraint.joint_name = "joint4"
                 joint_4_constraint.position = original_joint_positions[3]

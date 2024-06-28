@@ -15,13 +15,15 @@ import tf2_ros
 import tf2_geometry_msgs
 import os
 import sys
+from collections import deque
 
 # PID gain values
 KP = 0.0001
 KI = 0.00005
 KD = 0.0001
 # Minimum distance to the object to be reached
-MIN_Z_DISTANCE = 0.05
+MIN_Z_DISTANCE = 0.1
+BUFFER_SIZE = 5
 
 class ControllerNode(Node):
 
@@ -29,7 +31,7 @@ class ControllerNode(Node):
         super().__init__("controller_node_card")
 
         # Subscribers
-        self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)
+        self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)   ######### I CHANGE THIS LINE, IT WAS 30 THE QOS
         self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 10)
         self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 10)
 
@@ -69,17 +71,22 @@ class ControllerNode(Node):
         self.clip_val = 30.0
 
         self.shutdown_flag = False
-        self.pick_card = False  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
+        self.pick_card = True  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
 
         # TF2 buffer and listener
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
+        # Depth buffer
+        self.depth_buffer = deque(maxlen=BUFFER_SIZE)
+
+        self.stop_movement_flag = False  # Flag to indicate stopping movement
+
         self.get_logger().info("Controller node initialized")
 
     def detections_callback(self, msg: DetectionArray):
         for detection in msg.detections:
-            if detection.class_name == 'POS':  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
+            if detection.class_name == 'CreditCard':  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
                 self.process_detection(detection)
 
     def process_detection(self, detection):
@@ -128,27 +135,47 @@ class ControllerNode(Node):
                 self.target_position.y = -world_error_point.y
 
             # Use depth information for Z-axis adjustment if available
-            if not self.pick_card: # POS reaching
+            if not self.pick_card:  # POS reaching
                 if self.pix and self.depth_image is not None:
                     depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
-                    if  depth_adjustment/1000 > MIN_Z_DISTANCE:
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    print(f'\n depth_adjustment: {depth_adjustment / 1000} \n')
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    if depth_adjustment / 1000 > MIN_Z_DISTANCE:
                         self.target_position.z = depth_adjustment / 1000.0  # Convert to meters
                         self.send_goal(self.target_position)
                         self.get_logger().info(f'POS Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
                     else:
                         self.get_logger().info('POS position is too close, stopping movement.')
                         self.stop_movement()
-            else:                  # Credit Card reaching
+            else:  # Credit Card reaching
                 if self.pix and self.depth_image is not None:
                     depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
-                    if  1e-6 <= (self.depth_at_pixel(self.pix[0], self.pix[1]))/1000:
-                        self.send_goal(self.target_position)
-                        self.get_logger().info(f'Credit card Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
-                    else:
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    print(f'\n depth_adjustment: {depth_adjustment / 1000} \n')
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    print("                              ")
+                    self.depth_buffer.append(depth_adjustment / 1000.0)  # Convert to meters and append to buffer
+                    if len(self.depth_buffer) == BUFFER_SIZE and np.mean(self.depth_buffer) < 0.1:
                         self.get_logger().info('Credit Card position is too close, stopping movement.')
                         self.stop_movement()
-                        rclpy.shutdown() # TO REMOVE **************
-
+                        self.stop_movement_flag = True  # Set flag to stop movement
+                        rclpy.shutdown()
+                    else:
+                        self.target_position.y = self.target_position.y + 0.25
+                        self.send_goal(self.target_position)
+                        self.get_logger().info(f'Credit card Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             self.get_logger().error(f'TF2 Error: {e}')
@@ -201,7 +228,7 @@ class ControllerNode(Node):
             return
 
     def timer_callback(self):
-        if self.target_position:
+        if self.target_position and not self.stop_movement_flag:
             self.send_goal(self.target_position)
 
     def send_goal(self, target_position: Point):
