@@ -19,8 +19,6 @@ import os
 import math
 from moveit.core.kinematic_constraints import construct_joint_constraint
 from moveit_msgs.msg import Constraints, JointConstraint
-from visualization_msgs.msg import MarkerArray
-from yolov8_msgs.msg import DetectionArray
 
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
@@ -28,11 +26,7 @@ DEPTH_DISTANCE_STEP = 0.025
 MINIMUM_DEPTH_DISTANCE = 0.15
 MIN_DISTANCE_FROM_OBJECT = 0.15
 
-
-
 class GoToPoseActionServer(Node):
-
-
 
     def __init__(self):
         super().__init__('control_server')
@@ -43,12 +37,12 @@ class GoToPoseActionServer(Node):
             execute_callback=self.execute_callback)
         self._logger = get_logger("go_to_pose_action_server")
 
-        #self.previous_position = Point(x=0.30104, y=0.017546, z=0.44321) # ---------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.30 is for ready pose)
         self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719)
 
         self.create_subscription(Float32, "/control/depth_adjustment", self.depth_adjustment_callback, 10)
+        self.first_movement_publisher = self.create_publisher(Bool, "/control/first_movement", 10)
 
-        self.pick_card = True # --------------------------------------> NEEED TO CHANGED
+        self.pick_card = True
         self.first_movement = True
         self.distance_from_object = Float32()
 
@@ -67,8 +61,7 @@ class GoToPoseActionServer(Node):
         self.lite6_arm = self.lite6.get_planning_component("lite6_arm")
         self.get_logger().info("Lite6 initialized")
 
-    # Plan and execute function
-    def plan_and_execute(self,robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
+    def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
         logger.info("Planning trajectory")
 
         if constraints is not None:
@@ -86,15 +79,17 @@ class GoToPoseActionServer(Node):
             robot_trajectory = plan_result.trajectory
             robot.execute(robot_trajectory, controllers=[])
             self.first_movement = False
+            msg = Bool()
+            msg.data = False
+            self.first_movement_publisher.publish(msg)
         else:
             logger.error("Planning failed")
             time.sleep(0.5)
-        
+
         time.sleep(sleep_time)
 
     def depth_adjustment_callback(self, msg):
-        self.distance_from_object.data= msg.data
-
+        self.distance_from_object.data = msg.data
 
     def execute_callback(self, goal_handle):
         goal = goal_handle.request.pose
@@ -128,42 +123,39 @@ class GoToPoseActionServer(Node):
             self.lite6_arm.set_start_state_to_current_state()
             check_init_pose = robot_state.get_pose("camera_color_optical_frame")
 
-
-            if self.first_movement:
+            if self.first_movement:  # First movement of the robot for reaching an object, then it aligns with the object
                 print("First movement")
                 if not self.pick_card:
                     movz = 0.15
                 else:
-                    movz = min(movz,0.05)
+                    movz = max(movz, 0.10)
                 time.sleep(1.0)
                 self.previous_position = check_init_pose.position
 
-            else:
-                # Compute the new position
-                movx = check_init_pose.position.x + (movx - self.previous_position.x)
+            else:  # Aligning the robot with the object
 
                 distance = movy - check_init_pose.position.y
 
-                if  distance > 0.05 and self.pick_card:  # For CreditCard but this condition does not make any sense
-                    movy = check_init_pose.position.y + DEPTH_DISTANCE_STEP
-                else: # For POS object
-                    movy = check_init_pose.position.y #+ (movy - self.previous_position.y)
-                    #rclpy.shutdown()  
+                if self.pick_card:  # For CreditCard
+                    movy = check_init_pose.position.y
+                else:  # For POS object
+                    movy = check_init_pose.position.y + (movy - self.previous_position.y)
 
                 # Update movz conditionally
-                if movz > MIN_DISTANCE_FROM_OBJECT and not self.pick_card: # For Pos object
+                if movz > MIN_DISTANCE_FROM_OBJECT and not self.pick_card:  # For Pos object
                     movz = check_init_pose.position.z - DEPTH_DISTANCE_STEP
-                else: #for CreditCard
+                else:  # for CreditCard
                     movz = check_init_pose.position.z + (movz - self.previous_position.z)
-                    #rclpy.shutdown()
 
                 # Ensure the new position is within the movement threshold
                 dist_x = abs(movx - self.previous_position.x)
                 dist_y = abs(movy - self.previous_position.y)
                 dist_z = abs(movz - self.previous_position.z)
 
-                if dist_x > MAX_MOVEMENT_THRESHOLD:
+                if dist_x > MAX_MOVEMENT_THRESHOLD and not self.pick_card:
                     movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD)
+                elif self.pick_card:
+                    movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD/2 if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD/2)
 
                 if dist_y > MAX_MOVEMENT_THRESHOLD:
                     movy = self.previous_position.y + (MAX_MOVEMENT_THRESHOLD if movy > self.previous_position.y else -MAX_MOVEMENT_THRESHOLD)
@@ -177,13 +169,12 @@ class GoToPoseActionServer(Node):
             if not self.pick_card:
                 movz = min(max(movz, MINIMUM_DEPTH_DISTANCE), 0.40)
             else:
-                movz = min(max(movz, 0.05), 0.40)
+                movz = min(max(movz, 0.10), 0.40)
 
             pose_goal = Pose()
             pose_goal.position.x = movx
-            pose_goal.position.y = movy 
+            pose_goal.position.y = movy
             pose_goal.position.z = movz
-
             pose_goal.orientation = orientation
 
             result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
@@ -197,14 +188,13 @@ class GoToPoseActionServer(Node):
             constraints = Constraints()
             constraints.name = "joints_constraints"
 
-            if orientation.x == 0.64135:  # 0.69237: CreditCard   -------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK (0.64135 is for camera_color_optical_frame)
+            if orientation.x == 0.64135:  # CreditCard
                 joint_4_constraint = JointConstraint()
                 joint_4_constraint.joint_name = "joint4"
                 joint_4_constraint.position = original_joint_positions[3]
                 joint_4_constraint.tolerance_above = 1.5
                 joint_4_constraint.tolerance_below = 1.5
                 joint_4_constraint.weight = 1.0
-
                 constraints.joint_constraints.append(joint_4_constraint)
 
                 joint_5_constraint = JointConstraint()
@@ -213,7 +203,6 @@ class GoToPoseActionServer(Node):
                 joint_5_constraint.tolerance_above = 1.5
                 joint_5_constraint.tolerance_below = 1.5
                 joint_5_constraint.weight = 1.0
-
                 constraints.joint_constraints.append(joint_5_constraint)
 
                 joint_6_constraint = JointConstraint()
@@ -222,7 +211,6 @@ class GoToPoseActionServer(Node):
                 joint_6_constraint.tolerance_above = 1.5
                 joint_6_constraint.tolerance_below = 1.5
                 joint_6_constraint.weight = 1.0
-
                 constraints.joint_constraints.append(joint_6_constraint)
 
             else:
@@ -232,7 +220,6 @@ class GoToPoseActionServer(Node):
                 joint_4_constraint.tolerance_above = 1.5
                 joint_4_constraint.tolerance_below = 1.5
                 joint_4_constraint.weight = 1.0
-
                 constraints.joint_constraints.append(joint_4_constraint)
 
                 joint_5_constraint = JointConstraint()
@@ -241,7 +228,6 @@ class GoToPoseActionServer(Node):
                 joint_5_constraint.tolerance_above = 1.5
                 joint_5_constraint.tolerance_below = 1.5
                 joint_5_constraint.weight = 1.0
-
                 constraints.joint_constraints.append(joint_5_constraint)
 
                 joint_6_constraint = JointConstraint()
@@ -250,7 +236,6 @@ class GoToPoseActionServer(Node):
                 joint_6_constraint.tolerance_above = 1.5
                 joint_6_constraint.tolerance_below = 1.5
                 joint_6_constraint.weight = 1.0
-
                 constraints.joint_constraints.append(joint_6_constraint)
 
             if not result:

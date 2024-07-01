@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Bool
 from geometry_msgs.msg import Point, PointStamped
 from lite6_enrico_interfaces.action import GoToPose
 from yolov8_msgs.msg import DetectionArray
@@ -19,9 +19,9 @@ import sys
 from collections import deque
 
 # PID gain values
-KP = 0.0001
-KI = 0.00005
-KD = 0.0001
+KP = 0.00005#0.0001
+KI = 0.0001#0.00005
+KD = 0.001#0.0001
 # Minimum distance to the object to be reached
 MIN_Z_DISTANCE = 0.1
 BUFFER_SIZE = 5
@@ -32,24 +32,26 @@ class ControllerNode(Node):
         super().__init__("controller_node_card")
 
         # Subscribers
-        self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)   ######### I CHANGE THIS LINE, IT WAS 30 THE QOS
+        self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)
         self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 10)
         self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 10)
+        self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)
+        self.create_subscription(Bool, '/control/first_movement', self.first_movement_callback, 10)
 
         # Publisher for depth adjustment
-        #self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 10)
         self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 10)
-
 
         # Action client for sending goal to the action server
         self._action_client = ActionClient(self, GoToPose, 'go_to_pose')
 
         # Timer to send goals periodically
-        self.goal_timer = self.create_timer(0.033, self.timer_callback) # I changed this line, it was 0.033 before  
+        self.goal_timer = self.create_timer(0.033, self.timer_callback)
 
         self.new_target = False
         self.base_position = Point(x=0.30104, y=0.017488, z=0.44326)
         self.goal_handle = None
+
+        self.first_movement = True
 
         # Variables for control loop
         self.intrinsics = None
@@ -74,7 +76,7 @@ class ControllerNode(Node):
         self.pid_y.sample_time = 0.033
 
         # Control clip value
-        self.clip_val = 30.0
+        self.clip_val = 10 #30.0
 
         self.shutdown_flag = False
         self.pick_card = True  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
@@ -86,12 +88,18 @@ class ControllerNode(Node):
         # Depth buffer
         self.depth_buffer = deque(maxlen=BUFFER_SIZE)
 
+        # Array to store align positions
+        self.align_positions = []
+
         self.get_logger().info("Controller node initialized")
 
     def detections_callback(self, msg: DetectionArray):
         for detection in msg.detections:
             if detection.class_name == 'CreditCard':  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
                 self.process_detection(detection)
+
+    def first_movement_callback(self, msg: Bool):
+        self.first_movement = msg.data
 
     def process_detection(self, detection):
         bbox_center_x = detection.bbox.center.position.x
@@ -138,6 +146,28 @@ class ControllerNode(Node):
                 self.target_position.x = 0.5 - world_error_point.x
                 self.target_position.y = -world_error_point.y
 
+            """
+            bbox_size = detection.bbox.size.x * detection.bbox.size.y
+            self.align_positions.append((self.target_position, bbox_size))
+
+            # Check if align_positions array has reached size 5
+            if len(self.align_positions) >= 30 and self.first_movement == False:
+                # Determine the tuple with the maximum bounding box size
+                max_bbox_tuple = max(self.align_positions, key=lambda item: item[1])
+                max_goal = max_bbox_tuple[0]
+                self.align_positions.clear()  # Clear the array for future use
+                self.send_goal(max_goal)
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print(f'\n max_goal: {max_goal} \n')
+                print("                              ")
+                print("                              ")
+                print("                              ")
+                print("                              ")
+            """
+
             # Use depth information for Z-axis adjustment if available
             if not self.pick_card:  # POS reaching
                 if self.pix and self.depth_image is not None:
@@ -161,21 +191,12 @@ class ControllerNode(Node):
             else:  # Credit Card reaching
                 if self.pix and self.depth_image is not None:
                     depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
-                    #print("                              ")
-                    #print("                              ")
-                    #print("                              ")
-                    #print("                              ")
                     print(f'\n depth_adjustment: {depth_adjustment / 1000} \n')
-                    #print("                              ")
-                    #print("                              ")
-                    #print("                              ")
-                    #print("                              ")
 
                     # Publish depth adjustment
                     msg = Float32()
                     msg.data = depth_adjustment / 1000
                     self.depth_adjustment_pub.publish(msg)
-
 
                     self.depth_buffer.append(depth_adjustment / 1000.0)  # Convert to meters and append to buffer
                     if len(self.depth_buffer) == BUFFER_SIZE and np.mean(self.depth_buffer) < 0.1:
@@ -199,20 +220,7 @@ class ControllerNode(Node):
                 if self.pix_grade is not None:
                     self.line += ' Grade: %2d' % self.pix_grade
                 self.line += '\r'
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
                 print(self.line)
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
-
                 sys.stdout.write(self.line)
                 sys.stdout.flush()
                 return result[2]  # Z-coordinate in camera space
@@ -252,7 +260,7 @@ class ControllerNode(Node):
             return
 
     def timer_callback(self):
-        if self.target_position :
+        if self.target_position:
             self.send_goal(self.target_position)
 
     def send_goal(self, target_position: Point):
@@ -272,9 +280,7 @@ class ControllerNode(Node):
             goal_msg.pose.orientation.z = 0.3936
             goal_msg.pose.orientation.w = -0.25673
 
-            # self.get_logger().info("Working with CreditCard")
-
-        self._action_client.wait_for_server(timeout_sec=0.1) # I changed this line, it was 0.033 before
+        self._action_client.wait_for_server(timeout_sec=0.033)
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
 
