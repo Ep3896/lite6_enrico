@@ -251,7 +251,7 @@ class ControllerNode(Node):
             goal_msg.pose.orientation.z = 0.3936
             goal_msg.pose.orientation.w = -0.25673
 
-        self._action_client.wait_for_server() #it was 0.0333
+        self._action_client.wait_for_server(timeout_sec=0.1) #it was 0.0333
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
 

@@ -20,7 +20,6 @@ import os
 import math
 from moveit.core.kinematic_constraints import construct_joint_constraint
 from moveit_msgs.msg import Constraints, JointConstraint
-from threading import Thread, Lock
 
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
@@ -42,14 +41,18 @@ class GoToPoseActionServer(Node):
         self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719)
 
         self.joint_states_pub = self.create_publisher(JointState, '/control/joint_states', 10)
+        self.stop_execution_sub = self.create_subscription(Bool, '/control/stop_execution', self.stop_execution_callback, 10)
 
         self.create_subscription(Float32, "/control/depth_adjustment", self.depth_adjustment_callback, 10)
         self.first_movement_publisher = self.create_publisher(Bool, "/control/first_movement", 10)
+        self.initial_distance_y_pub = self.create_publisher(Float32, "/control/initial_distance_y", 10)
 
         self.pick_card = True
         self.first_movement = True
+        self.initial_distance_y = 0.0
         self.distance_from_object = Float32()
         self.count = 0
+        self.stop_execution = False
 
         moveit_config = (
             MoveItConfigsBuilder(robot_name="UF_ROBOT", package_name="lite6_enrico")
@@ -66,7 +69,16 @@ class GoToPoseActionServer(Node):
         self.lite6_arm = self.lite6.get_planning_component("lite6_arm")
         self.get_logger().info("Lite6 initialized")
 
+    def stop_execution_callback(self, msg):
+        self.stop_execution = msg.data
+        if self.stop_execution:
+            self._logger.info("Received stop execution signal. Halting operations.")
+
     def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
+        if self.stop_execution:
+            logger.info("Execution halted due to stop signal.")
+            return
+
         logger.info("Planning trajectory")
 
         if constraints is not None:
@@ -111,11 +123,11 @@ class GoToPoseActionServer(Node):
                     self.joint_states_pub.publish(joint_state_msg)
                 
                 self.count += 1
-                if self.count == 7:
-                    time.sleep(15.0)
+
+                while self.count == 10:
+                    self.joint_states_pub.publish(joint_state_msg)
+                    time.sleep(5.0)
                     print("SLEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEPPPPPPPPPPPPPPPPPPPPPIIIIIIIIIIIIIIIIIIIIIIIINNNNNNG")
-                    self.count = 0
-                    rclpy.shutdown()
 
         else:
             logger.error("Planning failed")
@@ -130,6 +142,12 @@ class GoToPoseActionServer(Node):
         goal = goal_handle.request.pose
 
         self.get_logger().info(f"Received goal - Position: {goal.position}, Orientation: {goal.orientation}")
+
+        if self.first_movement and goal.position.y != 0.0:
+            self.initial_distance_y = goal.position.y
+            distance_y_msg = Float32()
+            distance_y_msg.data = self.initial_distance_y
+            self.initial_distance_y_pub.publish(distance_y_msg)
 
         updated_camera_position = self.go_to_position(goal.position.x, goal.position.y, goal.position.z, goal.orientation)
 
@@ -146,6 +164,10 @@ class GoToPoseActionServer(Node):
         return result
 
     def go_to_position(self, movx, movy, movz, orientation):
+        if self.stop_execution:
+            self._logger.info("Execution halted due to stop signal.")
+            return None
+
         plan = False
         planning_scene_monitor = self.lite6.get_planning_scene_monitor()
         updated_camera_position = None
@@ -164,12 +186,10 @@ class GoToPoseActionServer(Node):
                     movz = 0.15
                 else:
                     movz = max(movz, 0.10)
-                #time.sleep(1.0)
+                    #time.sleep(1.0)
                 self.previous_position = check_init_pose.position
 
             else:  # Aligning the robot with the object
-
-                distance = movy - check_init_pose.position.y
 
                 if self.pick_card:  # For CreditCard
                     movy = check_init_pose.position.y
