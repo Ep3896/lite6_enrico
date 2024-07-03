@@ -103,25 +103,76 @@ class Movejoints(Node):
             self.get_logger().info(f"Planned trajectory: {robot_trajectory}")
             self.lite6.execute(robot_trajectory, controllers=[])
             self.get_logger().info("Robot moved to the selected configuration")
-            rclpy.shutdown()
+            time.sleep(1.0)
+            self.move_ee_to_camera_pos()
+            #rclpy.shutdown()
 
             time.sleep(5.0)
         else:
             self.get_logger().info("Failed to plan the trajectory")
 
+    def move_ee_to_camera_pos(self):
+        self.get_logger().info("Moving EE to camera position")
+        planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+        robot_state = RobotState(self.lite6.get_robot_model())
+
+        with planning_scene_monitor.read_write() as scene:
+            robot_state = scene.current_state
+            ee_pose = robot_state.get_pose("link_tcp")
+            camera_pose = robot_state.get_pose("camera_color_optical_frame")
+
+            pose_goal = Pose()
+            pose_goal.position = camera_pose.position
+            pose_goal.orientation = ee_pose.orientation
+
+            original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)
+
+            robot_state.update()
+
+            if not result:
+                self._logger.error("IK solution was not found!")
+                return
+            else:
+                plan = True
+                self.lite6_arm.set_goal_state(robot_state=robot_state)
+                robot_state.update()
+                robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                robot_state.update()
+        if plan:
+            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+
+
+    def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None):
+        logger.info("Planning trajectory")
+
+        if multi_plan_parameters is not None:
+            plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)
+        elif single_plan_parameters is not None:
+            plan_result = planning_component.plan(single_plan_parameters=single_plan_parameters)
+        else:
+            plan_result = planning_component.plan()
+
+        if plan_result:
+            logger.info("Executing plan")
+            robot_trajectory = plan_result.trajectory
+            robot.execute(robot_trajectory, controllers=[])
+
+        else:
+            logger.error("Planning failed")
+            time.sleep(0.5)
+
+        time.sleep(sleep_time)
+
+
+
 
 def main(args=None):
     rclpy.init(args=args)
     storing_configurations_area = Movejoints()
-    #storing_configurations_area.move_to_configuration([0.867841899394989, 1.1905378103256226, 0.6513537168502808, -0.8807912468910217, -0.7474675178527832, -1.4510573148727417])
-    #storing_configurations_area.move_to_configuration([1.5603810548782349, 2.6416571140289307, 0.5761044025421143, -1.9227548837661743, -0.6542903184890747, -0.23332586884498596])
-    #storing_configurations_area.move_to_configuration([0.0, 1.55, 0.0, 0.0, 1.5, 0.0])
-    #storing_configurations_area.move_to_configuration([0.43086451292037964, 0.5473434925079346, 0.34440743923187256, -1.1794394254684448, -0.13853764533996582, 1.5742478370666504])
-    #storing_configurations_area.move_to_configuration([0.2970631420612335, 0.8729060888290405, 0, -1.7449959516525269, -0.9600739479064941, -1.0469086170196533])
     storing_configurations_area.print_joint_positions()
-    #storing_configurations_area.move_to_configuration([0.0001019981864374131, 1.5500705242156982, 1.463597800466232e-05, -0.0001513458846602589, 1.4999010562896729, -8.756755414651707e-05])
-    #storing_configurations_area.move_to_configuration([-5.69404692214448e-05, 1.5500444173812866, 6.962205952731892e-05, -0.00014525174628943205, 1.4998596906661987, -4.0878539948607795e-06])
-    #storing_configurations_area.move_to_configuration([0.7189179062843323, 0.7136635184288025, 0.8789536952972412, -0.6945827007293701, -0.8471831679344177, -1.6230249404907227])
+    #time.sleep(1.0)
+    #storing_configurations_area.move_ee_to_camera_pos()
     """
     planning_scene_monitor = storing_configurations_area.lite6.get_planning_scene_monitor()
     with planning_scene_monitor.read_only() as scene:
