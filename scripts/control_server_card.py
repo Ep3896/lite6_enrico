@@ -15,10 +15,12 @@ import numpy as np
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
 from std_msgs.msg import Bool, Float32
+from sensor_msgs.msg import JointState
 import os
 import math
 from moveit.core.kinematic_constraints import construct_joint_constraint
 from moveit_msgs.msg import Constraints, JointConstraint
+from threading import Thread, Lock
 
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
@@ -39,12 +41,15 @@ class GoToPoseActionServer(Node):
 
         self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719)
 
+        self.joint_states_pub = self.create_publisher(JointState, '/control/joint_states', 10)
+
         self.create_subscription(Float32, "/control/depth_adjustment", self.depth_adjustment_callback, 10)
         self.first_movement_publisher = self.create_publisher(Bool, "/control/first_movement", 10)
 
         self.pick_card = True
         self.first_movement = True
         self.distance_from_object = Float32()
+        self.count = 0
 
         moveit_config = (
             MoveItConfigsBuilder(robot_name="UF_ROBOT", package_name="lite6_enrico")
@@ -82,6 +87,36 @@ class GoToPoseActionServer(Node):
             msg = Bool()
             msg.data = False
             self.first_movement_publisher.publish(msg)
+
+
+            if self.pick_card:
+                # Publish joint states after executing the plan
+                planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+                with planning_scene_monitor.read_only() as scene:
+                    robot_state_to_publish = scene.current_state
+                    robot_state_to_publish.update()
+
+                    joint_state_msg = JointState()
+                    joint_state_msg.header.stamp = self.get_clock().now().to_msg()
+                    joint_state_msg.name = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+                    
+                    joint_positions = robot_state_to_publish.get_joint_group_positions('lite6_arm')
+
+                    if joint_positions is not None:
+                        joint_positions_list = []
+                        for pos in joint_positions:
+                            joint_positions_list.append(pos)
+                        joint_state_msg.position = joint_positions_list
+
+                    self.joint_states_pub.publish(joint_state_msg)
+                
+                self.count += 1
+                if self.count == 7:
+                    time.sleep(15.0)
+                    print("SLEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEPPPPPPPPPPPPPPPPPPPPPIIIIIIIIIIIIIIIIIIIIIIIINNNNNNG")
+                    self.count = 0
+                    rclpy.shutdown()
+
         else:
             logger.error("Planning failed")
             time.sleep(0.5)
@@ -129,7 +164,7 @@ class GoToPoseActionServer(Node):
                     movz = 0.15
                 else:
                     movz = max(movz, 0.10)
-                time.sleep(1.0)
+                #time.sleep(1.0)
                 self.previous_position = check_init_pose.position
 
             else:  # Aligning the robot with the object
@@ -155,9 +190,9 @@ class GoToPoseActionServer(Node):
                 if dist_x > MAX_MOVEMENT_THRESHOLD and not self.pick_card:
                     movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD)
                 elif self.pick_card:
-                    movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD/2 if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD/2)
+                    movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD / 2 if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD / 2)
 
-                if dist_y > MAX_MOVEMENT_THRESHOLD:
+                if dist_y > MAX_MOVEMENT_THRESHOLD and not self.pick_card:
                     movy = self.previous_position.y + (MAX_MOVEMENT_THRESHOLD if movy > self.previous_position.y else -MAX_MOVEMENT_THRESHOLD)
 
                 if dist_z > MAX_MOVEMENT_THRESHOLD / 2:
@@ -254,6 +289,7 @@ class GoToPoseActionServer(Node):
             updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
             self.previous_position = updated_camera_position
             return updated_camera_position
+
 
 def main(args=None):
     rclpy.init(args=args)

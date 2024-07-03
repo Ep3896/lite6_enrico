@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from std_msgs.msg import Float32, Bool
+from std_msgs.msg import Float32, Bool, Float32MultiArray
 from geometry_msgs.msg import Point, PointStamped
 from lite6_enrico_interfaces.action import GoToPose
 from yolov8_msgs.msg import DetectionArray
@@ -19,9 +19,9 @@ import sys
 from collections import deque
 
 # PID gain values
-KP = 0.00005#0.0001
-KI = 0.0001#0.00005
-KD = 0.001#0.0001
+KP = 0.00005
+KI = 0.0001
+KD = 0.001
 # Minimum distance to the object to be reached
 MIN_Z_DISTANCE = 0.1
 BUFFER_SIZE = 5
@@ -35,11 +35,14 @@ class ControllerNode(Node):
         self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)
         self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 10)
         self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 10)
-        self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)
         self.create_subscription(Bool, '/control/first_movement', self.first_movement_callback, 10)
 
         # Publisher for depth adjustment
         self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 10)
+
+        # Publisher for bounding box area
+        self.bbox_area_pub = self.create_publisher(Float32, '/control/bbox_area', 10)
+        self.bbox_area_old = 0
 
         # Action client for sending goal to the action server
         self._action_client = ActionClient(self, GoToPose, 'go_to_pose')
@@ -60,6 +63,7 @@ class ControllerNode(Node):
         self.line = None
         self.pix_grade = None
         self.bounding_box_center = []
+        self.bbox_area = []
         self.target_position = Point(x=0.0, y=0.0, z=0.0)
         self.bridge = CvBridge()
 
@@ -76,10 +80,10 @@ class ControllerNode(Node):
         self.pid_y.sample_time = 0.033
 
         # Control clip value
-        self.clip_val = 10 #30.0
+        self.clip_val = 10
 
         self.shutdown_flag = False
-        self.pick_card = True  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
+        self.pick_card = True  # Change based on the object to pick
 
         # TF2 buffer and listener
         self.tf_buffer = tf2_ros.Buffer()
@@ -88,14 +92,11 @@ class ControllerNode(Node):
         # Depth buffer
         self.depth_buffer = deque(maxlen=BUFFER_SIZE)
 
-        # Array to store align positions
-        self.align_positions = []
-
         self.get_logger().info("Controller node initialized")
 
     def detections_callback(self, msg: DetectionArray):
         for detection in msg.detections:
-            if detection.class_name == 'CreditCard':  # ---------------------------------------------------------------------------------> TO CHANGE BASED ON THE OBJECT TO PICK
+            if detection.class_name == 'CreditCard':  # Change based on the object to pick
                 self.process_detection(detection)
 
     def first_movement_callback(self, msg: Bool):
@@ -104,6 +105,9 @@ class ControllerNode(Node):
     def process_detection(self, detection):
         bbox_center_x = detection.bbox.center.position.x
         bbox_center_y = detection.bbox.center.position.y
+
+        self.bbox_area = detection.bbox.size.x * detection.bbox.size.y
+
 
         self.bounding_box_center = [bbox_center_x, bbox_center_y]
 
@@ -138,56 +142,25 @@ class ControllerNode(Node):
 
             print(f'\n world_error_point: {world_error_point} \n')
 
-            # Update the target position for the servoing ( THIS IS NOT A ROBUST SOLUTION, IT IS JUST USEFUL WHEN THE CAMERA POINTS DOWNWARDS)
+            # Update the target position for the servoing
             if not self.pick_card:
-                self.target_position.x = 0.578 - world_error_point.x  # this is not clear why it is mirrored but it was necessary
-                self.target_position.y = -world_error_point.y  # y axis was inverted, need to check possible boundary problems
+                self.target_position.x = 0.578 - world_error_point.x
+                self.target_position.y = -world_error_point.y
             else:
                 self.target_position.x = 0.5 - world_error_point.x
                 self.target_position.y = -world_error_point.y
-
-            """
-            bbox_size = detection.bbox.size.x * detection.bbox.size.y
-            self.align_positions.append((self.target_position, bbox_size))
-
-            # Check if align_positions array has reached size 5
-            if len(self.align_positions) >= 30 and self.first_movement == False:
-                # Determine the tuple with the maximum bounding box size
-                max_bbox_tuple = max(self.align_positions, key=lambda item: item[1])
-                max_goal = max_bbox_tuple[0]
-                self.align_positions.clear()  # Clear the array for future use
-                self.send_goal(max_goal)
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print(f'\n max_goal: {max_goal} \n')
-                print("                              ")
-                print("                              ")
-                print("                              ")
-                print("                              ")
-            """
 
             # Use depth information for Z-axis adjustment if available
             if not self.pick_card:  # POS reaching
                 if self.pix and self.depth_image is not None:
                     depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
                     print(f'\n depth_adjustment: {depth_adjustment / 1000} \n')
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
-                    print("                              ")
                     if depth_adjustment / 1000 > MIN_Z_DISTANCE:
                         self.target_position.z = depth_adjustment / 1000.0  # Convert to meters
                         self.send_goal(self.target_position)
                         self.get_logger().info(f'POS Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
                     else:
                         self.get_logger().info('POS position is too close, stopping movement.')
-                        #self.stop_movement()
             else:  # Credit Card reaching
                 if self.pix and self.depth_image is not None:
                     depth_adjustment = self.depth_at_pixel(self.pix[0], self.pix[1])
@@ -201,8 +174,6 @@ class ControllerNode(Node):
                     self.depth_buffer.append(depth_adjustment / 1000.0)  # Convert to meters and append to buffer
                     if len(self.depth_buffer) == BUFFER_SIZE and np.mean(self.depth_buffer) < 0.1:
                         self.get_logger().info('Credit Card position is too close, stopping movement.')
-                        #self.stop_movement()
-                        #rclpy.shutdown()
                     else:
                         self.target_position.y = self.target_position.y + 0.25
                         self.send_goal(self.target_position)
@@ -280,7 +251,7 @@ class ControllerNode(Node):
             goal_msg.pose.orientation.z = 0.3936
             goal_msg.pose.orientation.w = -0.25673
 
-        self._action_client.wait_for_server(timeout_sec=0.033)
+        self._action_client.wait_for_server() #it was 0.0333
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
 
@@ -301,6 +272,12 @@ class ControllerNode(Node):
             self.get_logger().info('Goal succeeded!')
             self.new_target = True
             self.updated_camera_position = result.updated_camera_position.position
+
+            if self.bbox_area != self.bbox_area_old:
+                # Publish the area of the bounding box
+                self.bbox_area_pub.publish(Float32(data=self.bbox_area))
+                self.bbox_area_old = self.bbox_area
+
 
     def stop_movement(self):
         if self.goal_handle is not None:
