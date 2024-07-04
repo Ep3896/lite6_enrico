@@ -12,7 +12,10 @@ from moveit.planning import MoveItPy
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
 import time
-
+import robot_control
+import lite6_arm_interface
+from lite6_arm_interface.srv import FindBoxes
+from lite6_arm_interface.msg import Box
 
 
 class Movejoints(Node):
@@ -41,7 +44,7 @@ class Movejoints(Node):
         self.create_subscription(JointState, '/control/joint_states', self.joint_states_callback, 10)
         self.create_subscription(Float32, '/control/initial_distance_y', self.initial_distance_y_callback, 10)
 
-        self.stop_execution_pub = self.create_publisher(Bool, '/control/stop_execution', 10)
+        self.stop_execution_pub = self.create_publisher(Bool, '/control/stop_execution', 30)
         
         self.current_joint_states = None
         self.initial_distance_y = None
@@ -85,10 +88,11 @@ class Movejoints(Node):
 
             if len(self.align_positions) >= 3:
                 self.get_logger().info(f'Buffer size is {len(self.align_positions)}, selecting max area configuration')
-                self.select_max_area_configuration()
                 stop_msg = Bool()
                 stop_msg.data = True
                 self.stop_execution_pub.publish(stop_msg)
+                self.select_max_area_configuration()
+
 
     def joint_states_callback(self, msg):
         self.current_joint_states = msg
@@ -125,7 +129,14 @@ class Movejoints(Node):
             time.sleep(1.5)
             self.get_logger().info("Moving down to card")
             self.move_down_to_card()
-            rclpy.shutdown()
+            time.sleep(0.1)
+            robot = robot_control.RobotControl()
+            robot.open_gripper()
+            time.sleep(1.5)
+            robot.close_gripper()
+            time.sleep(1.5)
+            #rclpy.shutdown()
+            self.move_to_ready_position()
 
             
             #rclpy.shutdown()
@@ -167,51 +178,6 @@ class Movejoints(Node):
             self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
     def move_above_card(self):
         self.get_logger().info("Moving EE above card")
         planning_scene_monitor = self.lite6.get_planning_scene_monitor()
@@ -286,6 +252,20 @@ class Movejoints(Node):
         if plan:
             self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
 
+    def move_to_ready_position(self):
+        self.get_logger().info("Moving EE to Ready position")
+
+        self.lite6_arm.set_start_state_to_current_state()
+        self.lite6_arm.set_goal_state(configuration_name="Ready")
+        plan_result = self.lite6_arm.plan()
+
+            # execute the plan
+        if plan_result:
+            robot_trajectory = plan_result.trajectory
+            self.lite6.execute(robot_trajectory, controllers=[])
+
+
+
 
     def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None):
         logger.info("Planning trajectory")
@@ -317,6 +297,10 @@ def main(args=None):
     #storing_configurations_area.print_joint_positions()
     #time.sleep(1.0)
     #storing_configurations_area.move_ee_to_camera_pos()
+    robot = robot_control.RobotControl()
+    #robot.open_gripper()
+    #storing_configurations_area.move_to_ready_position()
+
     """
     planning_scene_monitor = storing_configurations_area.lite6.get_planning_scene_monitor()
     with planning_scene_monitor.read_only() as scene:

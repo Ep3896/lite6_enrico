@@ -41,7 +41,7 @@ class GoToPoseActionServer(Node):
         self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719)
 
         self.joint_states_pub = self.create_publisher(JointState, '/control/joint_states', 10)
-        self.stop_execution_sub = self.create_subscription(Bool, '/control/stop_execution', self.stop_execution_callback, 10)
+        self.stop_execution_sub = self.create_subscription(Bool, '/control/stop_execution', self.stop_execution_callback, 30)
 
         self.create_subscription(Float32, "/control/depth_adjustment", self.depth_adjustment_callback, 10)
         self.first_movement_publisher = self.create_publisher(Bool, "/control/first_movement", 10)
@@ -72,6 +72,9 @@ class GoToPoseActionServer(Node):
     def stop_execution_callback(self, msg):
         self.stop_execution = msg.data
         if self.stop_execution:
+            while True:
+                self.get_logger().info("Execution halted due to stop signal.")
+                time.sleep(1.0)
             self._logger.info("Received stop execution signal. Halting operations.")
 
     def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None, constraints=None):
@@ -124,7 +127,7 @@ class GoToPoseActionServer(Node):
                 
                 self.count += 1
 
-                while self.count == 10:
+                while self.count == 20:
                     self.joint_states_pub.publish(joint_state_msg)
                     time.sleep(5.0)
                     print("SLEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEPPPPPPPPPPPPPPPPPPPPPIIIIIIIIIIIIIIIIIIIIIIIINNNNNNG")
@@ -166,6 +169,7 @@ class GoToPoseActionServer(Node):
     def go_to_position(self, movx, movy, movz, orientation):
         if self.stop_execution:
             self._logger.info("Execution halted due to stop signal.")
+            rclpy.shutdown()
             return None
 
         plan = False
