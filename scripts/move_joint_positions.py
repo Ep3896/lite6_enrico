@@ -49,6 +49,8 @@ class Movejoints(Node):
         self.current_joint_states = None
         self.initial_distance_y = None
 
+        self.card_position_values = None
+
         # Timer to print joint positions periodically
         self.timer = self.create_timer(0.5, self.print_joint_positions) #it was 1.0
         # Timer to print the align_positions table periodically
@@ -128,15 +130,19 @@ class Movejoints(Node):
             self.move_above_card()
             time.sleep(1.5)
             self.get_logger().info("Moving down to card")
-            self.move_down_to_card()
-            time.sleep(0.1)
             robot = robot_control.RobotControl()
             robot.open_gripper()
+            time.sleep(0.5)
+            self.move_down_to_card()
             time.sleep(1.5)
             robot.close_gripper()
             time.sleep(1.5)
+            self.store_card_position()
+            time.sleep(1.5)
             #rclpy.shutdown()
-            self.move_to_ready_position()
+            self.move_to_ready_position(position_name="Ready") ####
+            time.sleep(1.5)
+            self.mv_to_card_position()
 
             
             #rclpy.shutdown()
@@ -206,6 +212,7 @@ class Movejoints(Node):
 
             if not result:
                 self._logger.error("IK solution was not found!")
+                #self.move_above_card()
                 return
             else:
                 plan = True
@@ -252,17 +259,44 @@ class Movejoints(Node):
         if plan:
             self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
 
-    def move_to_ready_position(self):
+    def move_to_ready_position(self, position_name): ####
         self.get_logger().info("Moving EE to Ready position")
 
         self.lite6_arm.set_start_state_to_current_state()
-        self.lite6_arm.set_goal_state(configuration_name="Ready")
+        self.lite6_arm.set_goal_state(configuration_name=position_name)  ####
         plan_result = self.lite6_arm.plan()
 
             # execute the plan
         if plan_result:
             robot_trajectory = plan_result.trajectory
             self.lite6.execute(robot_trajectory, controllers=[])
+
+    # This function has to recieve the array of joint positions of the moment the card was grabbed
+    # It has to be called right after the gripper is closed (maybe generates delay, so let's see).
+    def store_card_position(self):
+        self.get_logger().info("Moving to card initial position")
+        planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+        robot_state_grasping = RobotState(self.lite6.get_robot_model())
+
+        with planning_scene_monitor.read_write() as scene:
+            robot_scene_grasping = scene.current_state
+            #self.lite6_arm.set_start_state_to_current_state()
+            self.card_position_values = robot_scene_grasping.get_joint_group_positions("lite6_arm") #Sets the positions of the joints in the specified joint model group.
+                                                                                                            #The positions are specified in the order of the joints in the group.
+                                                                                                            #It returns the position of the joints in the joint model group.
+
+    def mv_to_card_position(self):
+        self.get_logger().info("Moving to card position")
+        self.lite6_arm.set_start_state_to_current_state()
+        robot_state = RobotState(self.lite6.get_robot_model())
+        robot_state.set_joint_group_positions("lite6_arm", self.card_position_values)
+        robot_state.update()
+        self.lite6_arm.set_goal_state(robot_state=robot_state)
+        plan_result = self.lite6_arm.plan()
+        if plan_result and self.card_position_values is not None:
+            robot_trajectory = plan_result.trajectory
+            self.lite6.execute(robot_trajectory, controllers=[])
+            self.get_logger().info("Robot moved to the card position")
 
 
 
@@ -297,9 +331,11 @@ def main(args=None):
     #storing_configurations_area.print_joint_positions()
     #time.sleep(1.0)
     #storing_configurations_area.move_ee_to_camera_pos()
-    robot = robot_control.RobotControl()
+    #robot = robot_control.RobotControl()
     #robot.open_gripper()
     #storing_configurations_area.move_to_ready_position()
+    storing_configurations_area.store_card_position()
+    #print(storing_configurations_area.card_position_values)
 
     """
     planning_scene_monitor = storing_configurations_area.lite6.get_planning_scene_monitor()

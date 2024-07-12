@@ -20,6 +20,7 @@ import os
 import math
 from moveit.core.kinematic_constraints import construct_joint_constraint
 from moveit_msgs.msg import Constraints, JointConstraint
+import move_joint_positions
 
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
@@ -317,6 +318,9 @@ class GoToPoseActionServer(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+    #initial_position = move_joint_positions.Movejoints() ###
+    #initial_position.move_to_ready_position(position_name="CameraSearching") ###
+    #time.sleep(3.0) ###
     action_server = GoToPoseActionServer()
     rclpy.spin(action_server)
     action_server.destroy_node()
