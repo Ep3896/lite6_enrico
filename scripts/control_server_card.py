@@ -70,9 +70,13 @@ class GoToPoseActionServer(Node):
         self.lite6_arm = self.lite6.get_planning_component("lite6_arm")
         self.get_logger().info("Lite6 initialized")
 
+    # this is recieved by move_joint_positions.py after the robot has aligned with the object and has to stop other movements to it can perform the pick
+    # Ideally , it has to be a service, but I am using a topic for now
+    # Moreover, this snippet has to be fixed as it has to resume the movement after the pick for reaching the POS object
     def stop_execution_callback(self, msg):
         self.stop_execution = msg.data
         if self.stop_execution:
+            # This is a blocking loop, I think it has to stay here until the robot has reached the ready position again after the pick
             while True:
                 self.get_logger().info("Execution halted due to stop signal.")
                 time.sleep(1.0)
@@ -126,9 +130,10 @@ class GoToPoseActionServer(Node):
 
                     self.joint_states_pub.publish(joint_state_msg)
                 
+                #### This is a bit ugly, but I need to publish the joint states 20 times to make sure the robot is in the correct position
                 self.count += 1
 
-                while self.count == 20:
+                while self.count == 20: # why do I need this counter? is it necessary?
                     self.joint_states_pub.publish(joint_state_msg)
                     time.sleep(5.0)
                     print("SLEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEPPPPPPPPPPPPPPPPPPPPPIIIIIIIIIIIIIIIIIIIIIIIINNNNNNG")
@@ -142,6 +147,11 @@ class GoToPoseActionServer(Node):
     def depth_adjustment_callback(self, msg):
         self.distance_from_object.data = msg.data
 
+    # This function is called when a new goal is received, this is the main function that moves the robot.
+    # It includes the logic for the first movement and the alignment with the object
+    # It also includes the logic for the depth adjustment
+    # It comprises the go_to_position function that is responsible for moving the robot
+        
     def execute_callback(self, goal_handle):
         goal = goal_handle.request.pose
 
@@ -153,21 +163,29 @@ class GoToPoseActionServer(Node):
             distance_y_msg.data = self.initial_distance_y
             self.initial_distance_y_pub.publish(distance_y_msg)
 
-        updated_camera_position = self.go_to_position(goal.position.x, goal.position.y, goal.position.z, goal.orientation)
+        if self.stop_execution:
+            self._logger.info("NOT MOVING DUE TO STOP EXECUTION SIGNAL")
+            goal_handle.abort() # Abort the goal, this means that I ignore the movement request from the client
+            return
+        else:
+            updated_camera_position = self.go_to_position(goal.position.x, goal.position.y, goal.position.z, goal.orientation)
 
-        self.get_logger().info(f"Updated camera position: {updated_camera_position}")
+            self.get_logger().info(f"Updated camera position: {updated_camera_position}")
 
-        result = GoToPose.Result()
-        result.success = True
-        if updated_camera_position:
-            result.updated_camera_position = Pose(
-                position=updated_camera_position,
-                orientation=goal.orientation
-            )
-        goal_handle.succeed()
-        return result
+            result = GoToPose.Result()
+            result.success = True
+            if updated_camera_position:
+                result.updated_camera_position = Pose(
+                    position=updated_camera_position,
+                    orientation=goal.orientation
+                )
+            goal_handle.succeed()
+            return result
 
     def go_to_position(self, movx, movy, movz, orientation):
+
+        # Check if the execution has been stopped, it has to be handled using another approach --------------->
+        # it has to wait until the robot has reached the ready position again after the pick
         if self.stop_execution:
             self._logger.info("Execution halted due to stop signal.")
             rclpy.shutdown()
@@ -190,7 +208,8 @@ class GoToPoseActionServer(Node):
                 if not self.pick_card:
                     movz = 0.15
                 else:
-                    movz = max(movz, 0.10)
+                    movz = max(movz, 0.15)
+                    movy = movy - 0.1 #0.12 was good # this 0.1 has been done beacuse the camera has to be a bit distant from the object , otherwise it will not detect it
                     #time.sleep(1.0)
                 self.previous_position = check_init_pose.position
 
@@ -229,7 +248,7 @@ class GoToPoseActionServer(Node):
             if not self.pick_card:
                 movz = min(max(movz, MINIMUM_DEPTH_DISTANCE), 0.40)
             else:
-                movz = min(max(movz, 0.10), 0.40)
+                movz = min(max(movz, 0.15), 0.40)
 
             pose_goal = Pose()
             pose_goal.position.x = movx
@@ -318,9 +337,6 @@ class GoToPoseActionServer(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    #initial_position = move_joint_positions.Movejoints() ###
-    #initial_position.move_to_ready_position(position_name="CameraSearching") ###
-    #time.sleep(3.0) ###
     action_server = GoToPoseActionServer()
     rclpy.spin(action_server)
     action_server.destroy_node()

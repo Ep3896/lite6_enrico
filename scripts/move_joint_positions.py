@@ -1,11 +1,8 @@
-#!/usr/bin/env python3
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32, Bool
 from sensor_msgs.msg import JointState
 from threading import Lock
-
 from geometry_msgs.msg import Pose, Point 
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy
@@ -43,18 +40,24 @@ class Movejoints(Node):
         self.create_subscription(Float32, '/control/bbox_area', self.bbox_area_callback, 10)
         self.create_subscription(JointState, '/control/joint_states', self.joint_states_callback, 10)
         self.create_subscription(Float32, '/control/initial_distance_y', self.initial_distance_y_callback, 10)
+        self.create_subscription(Float32, '/control/depth_adjustment', self.depth_adjustment_callback, 10)  
 
         self.stop_execution_pub = self.create_publisher(Bool, '/control/stop_execution', 30)
         
         self.current_joint_states = None
         self.initial_distance_y = None
+        self.depth_adjustment = None  # Initialize the depth adjustment variable
+        self.previous_depth_adjustment = None  # Initialize the previous depth adjustment variable
 
         self.card_position_values = None
 
         # Timer to print joint positions periodically
         self.timer = self.create_timer(0.5, self.print_joint_positions) #it was 1.0
-        # Timer to print the align_positions table periodically
-        #self.table_timer = self.create_timer(5.0, self.print_align_positions_table)
+
+    def depth_adjustment_callback(self, msg):
+        self.previous_depth_adjustment = self.depth_adjustment
+        self.depth_adjustment = msg.data
+        self.get_logger().info(f'Received depth adjustment: {self.depth_adjustment} meters')
 
     def initial_distance_y_callback(self, msg):
         self.initial_distance_y = msg.data
@@ -67,20 +70,9 @@ class Movejoints(Node):
         else:
             self.get_logger().info('Joint positions not available yet.')
 
-    def print_align_positions_table(self):
-        if self.align_positions:
-            self.get_logger().info("Joint Positions and BBox Areas Table:")
-            self.get_logger().info(f"{'Joint Positions':<100} | {'BBox Area':<10}")
-            self.get_logger().info("-" * 120)
-            for joint_positions, bbox_area in self.align_positions:
-                self.get_logger().info(f"{str(joint_positions):<100} | {bbox_area:<10}")
-        else:
-            self.get_logger().info("No configurations available yet.")
-
     def bbox_area_callback(self, msg):
         if self.current_joint_states:
             joint_positions = list(self.current_joint_states.position)
-            #self.get_logger().info(f'Current joint positions: {joint_positions}')
             bbox_area = msg.data
             self.align_positions.append((joint_positions, bbox_area))
             self.get_logger().info(f'Added configuration with bbox area: {bbox_area}')
@@ -95,12 +87,10 @@ class Movejoints(Node):
                 self.stop_execution_pub.publish(stop_msg)
                 self.select_max_area_configuration()
 
-
     def joint_states_callback(self, msg):
         self.current_joint_states = msg
 
     def select_max_area_configuration(self):
-        #if self.align_positions:
         max_config = max(self.align_positions, key=lambda x: x[1])
         self.get_logger().info(f'Selected configuration with max bbox area: {max_config[1]}')
         self.move_to_configuration(max_config[0])
@@ -139,16 +129,9 @@ class Movejoints(Node):
             time.sleep(1.5)
             self.store_card_position()
             time.sleep(1.5)
-            #rclpy.shutdown()
             self.move_to_ready_position(position_name="Ready") ####
             time.sleep(1.5)
             self.mv_to_card_position()
-
-            
-            #rclpy.shutdown()
-
-
-            #time.sleep(5.0)
         else:
             self.get_logger().info("Failed to plan the trajectory")
 
@@ -183,7 +166,6 @@ class Movejoints(Node):
         if plan:
             self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
 
-
     def move_above_card(self):
         self.get_logger().info("Moving EE above card")
         planning_scene_monitor = self.lite6.get_planning_scene_monitor()
@@ -196,14 +178,20 @@ class Movejoints(Node):
 
             pose_goal = Pose()
             pose_goal.position.x = ee_pose.position.x
-            pose_goal.position.y = ee_pose.position.y + distance_y + 0.08
+            pose_goal.position.y = ee_pose.position.y  # Adjust using depth adjustment value
+            if self.depth_adjustment is not None:
+                pose_goal.position.y += self.depth_adjustment
+            else:
+                if self.previous_depth_adjustment is not None:
+                    pose_goal.position.y += self.previous_depth_adjustment
+                else:
+                    self.get_logger().warning('Depth adjustment not available')
             pose_goal.position.z = ee_pose.position.z + 0.08
             
             pose_goal.orientation.x = 0.073046
             pose_goal.orientation.y = 0.99627
             pose_goal.orientation.z = -0.040845
             pose_goal.orientation.w = 0.020963
-
 
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
             result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)
@@ -212,7 +200,6 @@ class Movejoints(Node):
 
             if not result:
                 self._logger.error("IK solution was not found!")
-                #self.move_above_card()
                 return
             else:
                 plan = True
@@ -234,8 +221,8 @@ class Movejoints(Node):
 
             pose_goal = Pose()
             pose_goal.position.x = ee_pose.position.x
-            pose_goal.position.y = ee_pose.position.y - 0.02
-            pose_goal.position.z = ee_pose.position.z/2
+            pose_goal.position.y = ee_pose.position.y    ### TO BE ADJUSTED
+            pose_goal.position.z = ee_pose.position.z / 2 - 0.02 ### TO BE ADJUSTED
             
             pose_goal.orientation.x = 0.073046
             pose_goal.orientation.y = 0.99627
@@ -266,13 +253,10 @@ class Movejoints(Node):
         self.lite6_arm.set_goal_state(configuration_name=position_name)  ####
         plan_result = self.lite6_arm.plan()
 
-            # execute the plan
         if plan_result:
             robot_trajectory = plan_result.trajectory
             self.lite6.execute(robot_trajectory, controllers=[])
 
-    # This function has to recieve the array of joint positions of the moment the card was grabbed
-    # It has to be called right after the gripper is closed (maybe generates delay, so let's see).
     def store_card_position(self):
         self.get_logger().info("Moving to card initial position")
         planning_scene_monitor = self.lite6.get_planning_scene_monitor()
@@ -280,10 +264,7 @@ class Movejoints(Node):
 
         with planning_scene_monitor.read_write() as scene:
             robot_scene_grasping = scene.current_state
-            #self.lite6_arm.set_start_state_to_current_state()
-            self.card_position_values = robot_scene_grasping.get_joint_group_positions("lite6_arm") #Sets the positions of the joints in the specified joint model group.
-                                                                                                            #The positions are specified in the order of the joints in the group.
-                                                                                                            #It returns the position of the joints in the joint model group.
+            self.card_position_values = robot_scene_grasping.get_joint_group_positions("lite6_arm")
 
     def mv_to_card_position(self):
         self.get_logger().info("Moving to card position")
@@ -297,9 +278,6 @@ class Movejoints(Node):
             robot_trajectory = plan_result.trajectory
             self.lite6.execute(robot_trajectory, controllers=[])
             self.get_logger().info("Robot moved to the card position")
-
-
-
 
     def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None):
         logger.info("Planning trajectory")
@@ -315,40 +293,16 @@ class Movejoints(Node):
             logger.info("Executing plan")
             robot_trajectory = plan_result.trajectory
             robot.execute(robot_trajectory, controllers=[])
-
         else:
             logger.error("Planning failed")
             time.sleep(0.5)
 
         time.sleep(sleep_time)
 
-
-
-
 def main(args=None):
     rclpy.init(args=args)
     storing_configurations_area = Movejoints()
-    #storing_configurations_area.print_joint_positions()
-    #time.sleep(1.0)
-    #storing_configurations_area.move_ee_to_camera_pos()
-    #robot = robot_control.RobotControl()
-    #robot.open_gripper()
-    #storing_configurations_area.move_to_ready_position()
     storing_configurations_area.store_card_position()
-    #print(storing_configurations_area.card_position_values)
-
-    """
-    planning_scene_monitor = storing_configurations_area.lite6.get_planning_scene_monitor()
-    with planning_scene_monitor.read_only() as scene:
-        robot_state_to_publish = scene.current_state
-        robot_state_to_publish.update()
-        joint_positions = robot_state_to_publish.get_joint_group_positions("lite6_arm")
-        while True:
-            print(joint_positions)
-    """
-            
-    
-    
     
     try:
         rclpy.spin(storing_configurations_area)

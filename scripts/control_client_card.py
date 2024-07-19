@@ -76,12 +76,12 @@ class ControllerNode(Node):
 
     def init_subscribers(self):
         self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)
-        self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 100) #it was 10 before
-        self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 100) #it was 10 before
+        self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 10) #it was 10 before
+        self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 10) #it was 10 before
         self.create_subscription(Bool, '/control/first_movement', self.first_movement_callback, 10)
 
     def init_publishers(self):
-        self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 10)
+        self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 30)
         self.bbox_area_pub = self.create_publisher(Float32, '/control/bbox_area', 10)
         self.bbox_area_old = 0
 
@@ -215,9 +215,9 @@ class ControllerNode(Node):
             else:
                 self.get_logger().info('POS position is too close, stopping movement.')
         else:  # Credit Card reaching
-            msg = Float32()
-            msg.data = depth_adjustment / 1000
-            self.depth_adjustment_pub.publish(msg)
+            #msg = Float32()
+            #msg.data = depth_adjustment / 1000
+            #self.depth_adjustment_pub.publish(msg)
 
             self.depth_buffer.append(depth_adjustment / 1000.0)  # Convert to meters and append to buffer
             if len(self.depth_buffer) == BUFFER_SIZE and np.mean(self.depth_buffer) < 0.1:
@@ -245,7 +245,7 @@ class ControllerNode(Node):
             center_y = int(self.bounding_box_center[1] * scale_y)
 
             # Ensure a consistent neighborhood size (e.g., 31x31)
-            neighborhood_size = 10
+            neighborhood_size = 5 #10
 
             min_x = max(0, center_x - neighborhood_size)
             max_x = min(cv_image.shape[1], center_x + neighborhood_size + 1)
@@ -320,7 +320,7 @@ class ControllerNode(Node):
                 return depth
         return self.target_position.z
     #"""
-    
+
     def depth_image_callback(self, data):
         try:
             self.depth_image = self.bridge.imgmsg_to_cv2(data, data.encoding)
@@ -332,6 +332,13 @@ class ControllerNode(Node):
                         self.line_depth_at_pixel = '\rDepth at pixel(%3d, %3d): %7.1f(mm).' % (self.pix[0], self.pix[1], depth_adjustment)
                         self.update_print_info("line_depth_at_pixel", self.line_depth_at_pixel)
                         self.print_status()
+
+                         # Publish the depth adjustment value if first_movement is False
+                        if not self.first_movement and depth_adjustment != float('inf'):
+                            msg = Float32()
+                            msg.data = depth_adjustment / 1000.0  # Convert to meters
+                            self.depth_adjustment_pub.publish(msg)
+                            
                     else:
                         self.get_logger().info('Depth value discarded due to noise.')
         except CvBridgeError as e:
