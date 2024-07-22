@@ -35,7 +35,7 @@ class CameraManager(Node):
 
     def __init__(self):
         super().__init__('camera_manager')
-        self.current_mode = None
+        self.current_mode = "template_matching"
         self.process = None
 
         # Set up keyboard listener in the main thread
@@ -116,6 +116,7 @@ class CameraManager(Node):
 def main(args=None):
     rclpy.init(args=args)
     camera_manager = CameraManager()
+    camera_manager.start_rs_pointcloud()
     rclpy.spin(camera_manager)
     rclpy.shutdown()
 
