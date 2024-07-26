@@ -20,7 +20,8 @@ import os
 import math
 from moveit.core.kinematic_constraints import construct_joint_constraint
 from moveit_msgs.msg import Constraints, JointConstraint
-import move_joint_positions
+#import move_joint_positions
+import locked_movement
 
 # Maximum movement threshold
 MAX_MOVEMENT_THRESHOLD = 0.025  # Meters -----> before it was 0.01
@@ -39,7 +40,7 @@ class GoToPoseActionServer(Node):
             execute_callback=self.execute_callback)
         self._logger = get_logger("go_to_pose_action_server")
 
-        self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719)
+        #self.previous_position = Point(x=0.20749, y=0.059674, z=0.20719) # This is the initial position of the camera, this has to be dinamic not static
 
         self.joint_states_pub = self.create_publisher(JointState, '/control/joint_states', 10)
         self.stop_execution_sub = self.create_subscription(Bool, '/control/stop_execution', self.stop_execution_callback, 30)
@@ -69,6 +70,11 @@ class GoToPoseActionServer(Node):
         self.lite6 = MoveItPy(node_name="moveit_py", config_dict=moveit_config)
         self.lite6_arm = self.lite6.get_planning_component("lite6_arm")
         self.get_logger().info("Lite6 initialized")
+
+        robot_state = RobotState(self.lite6.get_robot_model())
+        check_init_pose = robot_state.get_pose("camera_color_optical_frame")
+        self.previous_position = check_init_pose.position
+
 
     # this is recieved by move_joint_positions.py after the robot has aligned with the object and has to stop other movements to it can perform the pick
     # Ideally , it has to be a service, but I am using a topic for now
@@ -103,10 +109,10 @@ class GoToPoseActionServer(Node):
             logger.info("Executing plan")
             robot_trajectory = plan_result.trajectory
             robot.execute(robot_trajectory, controllers=[])
-            self.first_movement = False
             msg = Bool()
-            msg.data = False
+            msg.data = self.first_movement
             self.first_movement_publisher.publish(msg)
+            self.first_movement = False
 
 
             if self.pick_card:
@@ -162,6 +168,7 @@ class GoToPoseActionServer(Node):
             distance_y_msg = Float32()
             distance_y_msg.data = self.initial_distance_y
             self.initial_distance_y_pub.publish(distance_y_msg)
+            print("Initial distance y: ", self.initial_distance_y)
 
         if self.stop_execution:
             self._logger.info("NOT MOVING DUE TO STOP EXECUTION SIGNAL")

@@ -1,3 +1,18 @@
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from std_msgs.msg import Float32, Bool, Float32MultiArray, String
+from sensor_msgs.msg import JointState
+from threading import Event
+from geometry_msgs.msg import Pose
+from moveit.core.robot_state import RobotState
+from moveit.planning import MoveItPy
+from moveit_configs_utils import MoveItConfigsBuilder
+from ament_index_python.packages import get_package_share_directory
+import time
+import threading
+import robot_control
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 import threading
 
 class Movejoints(Node):
@@ -81,8 +96,9 @@ class Movejoints(Node):
             self.get_logger().info("Alignment OK event set")
             if self.first_alignment:
                 self.first_alignment = False
-                self.move_ee_to_camera_pos()
-                self.continue_process_after_alignment()
+                #self.move_ee_to_camera_pos()
+                #time.sleep(1.0)
+                #self.continue_process_after_alignment()
         else:
             self.alignment_ok_event.clear()  # Clear the event otherwise
             self.get_logger().info("Alignment OK event cleared")
@@ -308,7 +324,10 @@ class Movejoints(Node):
 
                 if abs(error_x) > 20:  # Adjust this threshold as needed
                     self.adjust_robot_position(error_x)
-                    self.get_logger().info("Looping for alignment")
+                    self.get_logger().info("Looping for alignment")  # Beware that there was an attempt in which here continous_process_after_alignment was called method was called
+                    self.move_ee_to_camera_pos()
+                    time.sleep(1.0)
+                    self.continue_process_after_alignment()
                 else:
                     self.get_logger().info("Alignment within threshold, breaking loop")
                     self.alignment_within_threshold_event.set()  # Set the event to indicate alignment is within threshold
@@ -336,13 +355,13 @@ class Movejoints(Node):
             # So I can understand if the robot is moving in the right direction and if the error is decreasing, move slower
             # I call Kd the scaling factor that is the difference between the previous error and the current one
             # Proportional-Derivative (PD) control law
-            Kp = 0.001  # Proportional gain, adjust as needed
-            Kd = 0.0001  # Derivative gain, adjust as needed
+            Kp = 0.0001  # Proportional gain, adjust as needed
+            #Kd = 0.0001  # Derivative gain, adjust as needed
                 
             # Calculate derivative term (rate of change of error)
-            delta_error_x = error_x - self.previous_error_x
+            #delta_error_x = error_x - self.previous_error_x
 
-            adjustment = Kp * error_x + Kd * delta_error_x
+            adjustment = (-1) * Kp * error_x #+ Kd * delta_error_x
 
             pose_goal.position.y = camera_pose.position.y + adjustment
 
@@ -364,6 +383,7 @@ class Movejoints(Node):
                 self._logger.error("IK solution was not found!")
                 return
             else:
+                plan = True
                 self.lite6_arm.set_goal_state(robot_state=robot_state)
                 robot_state.update()
                 robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)

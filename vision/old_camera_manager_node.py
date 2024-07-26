@@ -1,21 +1,33 @@
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool
 from subprocess import Popen, run, PIPE
 import os
+import sys
+import termios
+import tty
+import select
 import time
 
 def is_device_available(device):
     try:
         result = run(['fuser', device], stdout=PIPE, stderr=PIPE)
-        return not bool(result.stdout)
+        if result.stdout:
+            # Device is busy
+            return False
+        else:
+            # Device is available
+            return True
     except Exception as e:
         print(f"Error checking device availability: {e}")
         return False
 
 def release_device(device):
     try:
-        run(['fuser', '-k', device], stdout=PIPE, stderr=PIPE)
+        result = run(['fuser', '-k', device], stdout=PIPE, stderr=PIPE)
+        if result.returncode == 0:
+            print(f"Successfully released {device}")
+        else:
+            print(f"Failed to release {device}: {result.stderr.decode()}")
     except Exception as e:
         print(f"Error releasing device: {e}")
 
@@ -23,38 +35,21 @@ class CameraManager(Node):
 
     def __init__(self):
         super().__init__('camera_manager')
-        self.current_mode = None
+        self.current_mode = "template_matching"
         self.process = None
 
-        self.create_subscription(Bool, '/control/start_pointcloud', self.start_pointcloud_callback, 10)
-        self.create_subscription(Bool, '/control/start_template_matching', self.start_template_matching_callback, 10)
-        self.create_subscription(Bool, '/control/start_card_edge_detection', self.start_card_edge_detection_callback, 10)
-
-    def start_pointcloud_callback(self, msg):
-        if msg.data:
-            self.start_rs_pointcloud()
-        else:
-            self.stop_rs_pointcloud()
-
-    def start_template_matching_callback(self, msg):
-        if msg.data:
-            self.start_template_matching()
-        else:
-            self.stop_template_matching()
-
-    def start_card_edge_detection_callback(self, msg):
-        if msg.data:
-            self.start_card_edge_detection()
-        else:
-            self.stop_card_edge_detection()
+        # Set up keyboard listener in the main thread
+        self.old_settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+        self.create_timer(0.1, self.keyboard_listener)
 
     def start_rs_pointcloud(self):
         if self.current_mode == 'pointcloud':
             return
         self.stop_current_process()
         self.get_logger().info('Starting rs_pointcloud')
-        self.process = Popen(['ros2', 'launch', 'realsense2_camera', 'rs_pointcloud_launch.py', 
-                          'depth_module.profile:=640x360x30', 'depth_module.exposure:=6000'])
+        #rs_launch_file = os.path.expanduser('~/ros2_ws/yolo_detection/install/realsense2_camera/share/realsense2_camera/examples/pointcloud/rs_pointcloud_launch.py')
+        self.process = Popen(['ros2', 'launch', 'realsense2_camera', 'rs_pointcloud_launch.py'])
         self.current_mode = 'pointcloud'
 
     def stop_rs_pointcloud(self):
@@ -123,11 +118,35 @@ class CameraManager(Node):
         release_device('/dev/video4')
         time.sleep(2)  # Add delay to ensure the device is properly released
 
+    def keyboard_listener(self):
+        try:
+            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+                key = sys.stdin.read(1)
+                if key == 't':
+                    self.toggle_mode()
+                elif key == 'c':
+                    self.start_card_edge_detection()
+        except Exception as e:
+            self.get_logger().error(f"Keyboard listener error: {e}")
+
+    def toggle_mode(self):
+        if self.current_mode == 'pointcloud':
+            self.start_template_matching()
+        else:
+            self.start_rs_pointcloud()
+
+    def destroy_node(self):
+        self.stop_current_process()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+        super().destroy_node()
+
 def main(args=None):
     rclpy.init(args=args)
     camera_manager = CameraManager()
+    camera_manager.start_rs_pointcloud()
     rclpy.spin(camera_manager)
     rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
+

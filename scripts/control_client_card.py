@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -45,7 +43,7 @@ class ControllerNode(Node):
         self._action_client = ActionClient(self, GoToPose, 'go_to_pose')
 
         # Timer to send goals periodically
-        self.goal_timer = self.create_timer(0.033, self.timer_callback)
+        #self.goal_timer = self.create_timer(0.033, self.timer_callback)
 
         self.new_target = False
         self.base_position = Point(x=0.30104, y=0.017488, z=0.44326)
@@ -76,12 +74,12 @@ class ControllerNode(Node):
 
     def init_subscribers(self):
         self.create_subscription(DetectionArray, '/yolo/detections_3d', self.detections_callback, 30)
-        self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 10) #it was 10 before
+        self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 100) #it was 10 before
         self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 10) #it was 10 before
         self.create_subscription(Bool, '/control/first_movement', self.first_movement_callback, 10)
 
     def init_publishers(self):
-        self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 30)
+        self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 100)
         self.bbox_area_pub = self.create_publisher(Float32, '/control/bbox_area', 10)
         self.bbox_area_old = 0
 
@@ -94,7 +92,7 @@ class ControllerNode(Node):
         self.pix_grade = None
         self.bounding_box_center = []
         self.bbox_area = []
-        self.target_position = Point(x=0.0, y=0.0, z=0.0)
+        self.target_position = Point()
         self.bridge = CvBridge()
 
         # Desired center of the image for picking mode
@@ -140,6 +138,10 @@ class ControllerNode(Node):
         self.update_print_info("bounding_box_center_x", bbox_center_x)
         self.update_print_info("bounding_box_center_y", bbox_center_y)
 
+        # Reset PID targets
+        self.pid_x.reset()
+        self.pid_y.reset()
+
         # Update PID controllers with the current position
         error_x = self.pid_x(bbox_center_x)
         error_y = self.pid_y(bbox_center_y)
@@ -175,8 +177,6 @@ class ControllerNode(Node):
 
             self.print_status()
 
-            self.update_target_position(world_error_point)
-
             # Use depth information for Z-axis adjustment if available
             if self.pix and self.depth_image is not None:
                 depth_adjustment = self.compute_depth_adjustment(self.pix[0], self.pix[1])
@@ -184,52 +184,48 @@ class ControllerNode(Node):
                     self.update_print_info("depth_adjustment", depth_adjustment / 1000)
                     self.print_status()
                     self.process_depth_adjustment(depth_adjustment)
+                    self.update_target_position(world_error_point, depth_adjustment)
                 else:
                     self.get_logger().info('Depth adjustment discarded due to noise.')
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             self.get_logger().error(f'TF2 Error: {e}')
 
-    def update_target_position(self, world_error_point):
-        if not self.pick_card:
-            self.target_position.x = 0.578 - world_error_point.x
-            self.target_position.y = -world_error_point.y
-        else:
-            self.target_position.x = 0.5 - world_error_point.x
-            self.target_position.y = -world_error_point.y
+    def update_target_position(self, world_error_point, depth_adjustment):
+        self.target_position.x = world_error_point.x + 0.01 # Offset to guarantee the camera to see the object
+        self.target_position.y = depth_adjustment / 1000.0  # Convert to meters
 
         self.update_print_info("target_position_x", self.target_position.x)
         self.update_print_info("target_position_y", self.target_position.y)
         self.print_status()
 
-
-################### image and DEPTH processing ############################
-
     def process_depth_adjustment(self, depth_adjustment):
         if not self.pick_card:  # POS reaching
             if depth_adjustment / 1000 > MIN_Z_DISTANCE:
                 self.target_position.z = depth_adjustment / 1000.0  # Convert to meters
-                self.send_goal(self.target_position)
+                if self.target_position.x != 0.0 and self.target_position.y != 0.0:
+                    self.send_goal(self.target_position)
+                else:
+                    print("All ZERO target were sent, invalid")
                 self.update_print_info("target_position_z", self.target_position.z)
                 self.print_status()
                 self.get_logger().info(f'POS Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
             else:
                 self.get_logger().info('POS position is too close, stopping movement.')
         else:  # Credit Card reaching
-            #msg = Float32()
-            #msg.data = depth_adjustment / 1000
-            #self.depth_adjustment_pub.publish(msg)
+            msg = Float32()
+            msg.data = depth_adjustment / 1000
+            self.depth_adjustment_pub.publish(msg)
 
             self.depth_buffer.append(depth_adjustment / 1000.0)  # Convert to meters and append to buffer
             if len(self.depth_buffer) == BUFFER_SIZE and np.mean(self.depth_buffer) < 0.1:
                 self.get_logger().info('Credit Card position is too close, stopping movement.')
             else:
-                self.target_position.y = self.target_position.y + 0.25
-                self.send_goal(self.target_position)
-                self.update_print_info("distance", self.target_position.y) # Distance from the camera to the credit card
+                self.target_position.y = depth_adjustment / 1000.0
+                if self.target_position.x != 0.0 and self.target_position.y != 0.0:
+                    self.send_goal(self.target_position)
+                self.update_print_info("distance", self.target_position.y)  # Distance from the camera to the credit card
                 self.print_status()
-                #self.get_logger().info(f'Credit card Target Position: X: {self.target_position.x}, Y: {self.target_position.y}, Z: {self.target_position.z}')
 
-    #"""
     def compute_depth_adjustment(self, x, y):
         if self.intrinsics and self.depth_image is not None:
             cv_image = self.depth_image  # Depth image in OpenCV format, cv_image is a numpy array of shape (height, width)
@@ -245,7 +241,7 @@ class ControllerNode(Node):
             center_y = int(self.bounding_box_center[1] * scale_y)
 
             # Ensure a consistent neighborhood size (e.g., 31x31)
-            neighborhood_size = 5 #10
+            neighborhood_size = 5  # 10
 
             min_x = max(0, center_x - neighborhood_size)
             max_x = min(cv_image.shape[1], center_x + neighborhood_size + 1)
@@ -297,29 +293,6 @@ class ControllerNode(Node):
 
             return depth
         return self.target_position.z
-    """
-    def compute_depth_adjustment(self, x, y):
-        if self.intrinsics and self.depth_image is not None:
-            cv_image = self.depth_image
-            height, width = cv_image.shape
-
-            if 0 <= x < width and 0 <= y < height:
-                depth = cv_image[y, x]
-                
-                if depth < 100:  # Consider depth values >= 100 mm as valid
-                    return float('inf')
-
-                result = rs2.rs2_deproject_pixel_to_point(self.intrinsics, [x, y], depth)
-                self.line_coordinate = 'Coordinate: %8.2f %8.2f %8.2f.' % (result[0], result[1], result[2])
-                if self.pix_grade is not None:
-                    self.line_coordinate += ' Grade: %2d' % self.pix_grade
-                self.line_coordinate += '\r'
-                self.update_print_info("line_coordinate", self.line_coordinate)
-                self.print_status()
-
-                return depth
-        return self.target_position.z
-    #"""
 
     def depth_image_callback(self, data):
         try:
@@ -336,7 +309,7 @@ class ControllerNode(Node):
                          # Publish the depth adjustment value if first_movement is False
                         if not self.first_movement and depth_adjustment != float('inf'):
                             msg = Float32()
-                            msg.data = depth_adjustment / 1000.0  # Convert to meters
+                            msg.data = float(depth_adjustment) / 1000.0  # Convert to meters
                             self.depth_adjustment_pub.publish(msg)
                             
                     else:
@@ -366,10 +339,6 @@ class ControllerNode(Node):
         except CvBridgeError as e:
             self.get_logger().error(f'CvBridge Error: {e}')
             return
-#############################################################à
-    def timer_callback(self):
-        if self.target_position:
-            self.send_goal(self.target_position)
 
     def send_goal(self, target_position: Point):
         goal_msg = GoToPose.Goal()
@@ -386,7 +355,7 @@ class ControllerNode(Node):
             goal_msg.pose.orientation.z = 0.3936
             goal_msg.pose.orientation.w = -0.25673
 
-        self._action_client.wait_for_server(timeout_sec=0.1)
+        self._action_client.wait_for_server() # it was 0.1 before
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)
         self._send_goal_future.add_done_callback(self.goal_response_callback)
 
@@ -408,10 +377,21 @@ class ControllerNode(Node):
             self.new_target = True
             self.updated_camera_position = result.updated_camera_position.position
 
+            self.update_print_info("target_position_x", self.updated_camera_position.x)
+            self.update_print_info("target_position_y", self.updated_camera_position.y)
+            self.update_print_info("target_position_z", self.updated_camera_position.z)
+            self.print_status()
+
             if self.bbox_area != self.bbox_area_old:
-                # Publish the area of the bounding box
-                self.bbox_area_pub.publish(Float32(data=self.bbox_area))
-                self.bbox_area_old = self.bbox_area
+                # Ensure bbox_area is a valid float before publishing
+                try:
+                    bbox_area_value = float(self.bbox_area)
+                    self.bbox_area_pub.publish(Float32(data=bbox_area_value))
+                    self.bbox_area_old = self.bbox_area
+                except (ValueError, TypeError) as e:
+                    self.get_logger().warning(f'Invalid bbox_area value: {self.bbox_area}. Error: {e}')
+        else:
+            self.get_logger().info('Goal failed :(')
 
     def stop_movement(self):
         if self.goal_handle is not None:

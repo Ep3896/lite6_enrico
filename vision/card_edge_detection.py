@@ -1,5 +1,9 @@
 import cv2
 import numpy as np
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32MultiArray, String,Bool
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 # Initialize video capture for the webcam (channel 4)
 cap = cv2.VideoCapture(4)
@@ -24,6 +28,34 @@ def does_line_cross_center(x1, y1, x2, y2, center_x, center_y):
         x_at_center_y = (center_y - c) / m
         return (min(y1, y2) <= center_y <= max(y1, y2) and abs(x_at_center_y - center_x) < 1) or \
                (min(x1, x2) <= center_x <= max(x1, x2) and abs(y_at_center_x - center_y) < 1)
+
+class CardEdgeDetection(Node):
+    def __init__(self):
+        super().__init__('card_edge_detection')
+
+        low_latency_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            depth=1
+        )
+
+        self.publisher_ = self.create_publisher(Float32MultiArray, '/control/bbox_center', 10)
+        self.status_publisher_ = self.create_publisher(Bool, '/control/alignment_status', 10)
+
+
+
+    def publish_bbox_center(self, x, y):
+        msg = Float32MultiArray()
+        msg.data = [float(x), float(y)]
+        self.publisher_.publish(msg)
+
+    def publish_alignment_status(self, status):
+        msg = Bool()
+        msg.data = status
+        self.status_publisher_.publish(msg)
+
+rclpy.init()
+node = CardEdgeDetection()
 
 while True:
     # Capture frame-by-frame
@@ -97,8 +129,13 @@ while True:
                       (mid_x + box_size, mid_y + box_size), (0, 0, 255), 2)
         if does_line_cross_center(x1, y1, x2, y2, center_x, center_y):
             print("OK")
+            node.publish_alignment_status(True)
+        else:
+            node.publish_alignment_status(False)
         if abs(mid_x - center_x) <= box_size and abs(mid_y - center_y) <= box_size:
             print("DONE")
+        # Publish the center coordinates of the bounding box
+        node.publish_bbox_center(mid_x, mid_y)
 
     # Display the resulting frames
     cv2.imshow('Original', frame)
@@ -111,4 +148,4 @@ while True:
 # When everything is done, release the capture
 cap.release()
 cv2.destroyAllWindows()
-
+rclpy.shutdown()
