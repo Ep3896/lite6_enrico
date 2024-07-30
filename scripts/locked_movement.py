@@ -14,6 +14,11 @@ import threading
 import robot_control
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 import threading
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+from tf2_ros import Buffer, TransformListener
+from tf2_geometry_msgs import do_transform_pose
+from geometry_msgs.msg import TransformStamped
 
 class Movejoints(Node):
 
@@ -155,8 +160,9 @@ class Movejoints(Node):
             self.get_logger().info("Robot moved to the selected configuration")
             time.sleep(1.5)
             self.get_logger().info("Moving above card")
-            self.move_above_card()
+            self.move_above_card_translation()
             time.sleep(1.5)
+            self.move_above_card_rotation()
             # Start the alignment timer
             self.alignment_ok_event.clear()
             self.alignment_within_threshold_event.clear()  # Clear the event before starting alignment
@@ -197,13 +203,14 @@ class Movejoints(Node):
             camera_pose = robot_state.get_pose("camera_color_optical_frame") #camera_color_optical_frame
 
             pose_goal = Pose()
-            pose_goal.position = camera_pose.position
+            pose_goal.position.x = camera_pose.position.x + 0.03
+            pose_goal.position.y = camera_pose.position.y
             pose_goal.position.z = ee_pose.position.z
 
             pose_goal.orientation = ee_pose.orientation
 
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=2.0)
 
             robot_state.update()
 
@@ -219,7 +226,7 @@ class Movejoints(Node):
         if plan:
             self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
 
-    def move_above_card(self):
+    def move_above_card_translation(self):
         self.get_logger().info("Moving EE above card")
         planning_scene_monitor = self.lite6.get_planning_scene_monitor()
         robot_state = RobotState(self.lite6.get_robot_model())
@@ -230,8 +237,8 @@ class Movejoints(Node):
             print('Final y of the target', self.depth_adjustment)
 
             pose_goal = Pose()
-            pose_goal.position.x = camera_pose.position.x
-            pose_goal.position.y = camera_pose.position.y #+ self.depth_adjustment # Adjust using depth adjustment value
+            pose_goal.position.x = camera_pose.position.x 
+            pose_goal.position.y = camera_pose.position.y  # Adjust using depth adjustment value
             if self.depth_adjustment is not None:
                 pose_goal.position.y += self.depth_adjustment
             else:
@@ -241,16 +248,12 @@ class Movejoints(Node):
                     self.get_logger().warning('Depth adjustment not available')
             pose_goal.position.z = camera_pose.position.z + 0.05 # Adjust using depth adjustment value
 
-            """
-            pose_goal.orientation.x = 0.073046
-            pose_goal.orientation.y = 0.99627
-            pose_goal.orientation.z = -0.040845
-            pose_goal.orientation.w = 0.020963
-            """
-            pose_goal.orientation.x = 0.7414
-            pose_goal.orientation.y = 0.67045
-            pose_goal.orientation.z = -0.016519
-            pose_goal.orientation.w = 0.023525
+            pose_goal.orientation.x = camera_pose.orientation.x
+            pose_goal.orientation.y = camera_pose.orientation.y
+            pose_goal.orientation.z = camera_pose.orientation.z
+            pose_goal.orientation.w = camera_pose.orientation.w
+            
+            robot_state.update()
 
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
             result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
@@ -269,6 +272,47 @@ class Movejoints(Node):
         if plan:
             self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
 
+
+    def move_above_card_rotation(self):
+        self.get_logger().info("Moving EE above card Rotation")
+        planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+        robot_state = RobotState(self.lite6.get_robot_model())
+
+        with planning_scene_monitor.read_write() as scene:
+            robot_state = scene.current_state
+            camera_pose = robot_state.get_pose("camera_color_optical_frame") #link_tcp before
+            print('Final y of the target', self.depth_adjustment)
+
+            pose_goal = Pose()
+            pose_goal.position.x = camera_pose.position.x 
+            pose_goal.position.y = camera_pose.position.y  # Adjust using depth adjustment value
+            pose_goal.position.z = camera_pose.position.z  # Adjust using depth adjustment value
+
+            # -0.71, 0.71, -0.02, 0.02
+            pose_goal.orientation.x = -0.71
+            pose_goal.orientation.y = 0.71
+            pose_goal.orientation.z = -0.02
+            pose_goal.orientation.w = 0.02
+            
+            robot_state.update()
+
+            original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+
+            robot_state.update()
+
+            if not result:
+                self._logger.error("IK solution was not found!")
+                return
+            else:
+                plan = True
+                self.lite6_arm.set_goal_state(robot_state=robot_state)
+                robot_state.update()
+                robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                robot_state.update()
+        if plan:
+            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+        
         # Switch to card edge detection after moving above card
         self.pointcloud_pub.publish(Bool(data=False))
         self.card_edge_detection_pub.publish(Bool(data=True))
@@ -283,13 +327,11 @@ class Movejoints(Node):
             ee_pose = robot_state.get_pose("link_tcp")
 
             pose_goal = Pose()
-            pose_goal.position.x = ee_pose.position.x
-            pose_goal.position.y = ee_pose.position.y - 0.005  ### TO BE ADJUSTED, I put it there because the gripper is thick
+            pose_goal.position.x = ee_pose.position.x + 0.02
+            pose_goal.position.y = ee_pose.position.y  ### TO BE ADJUSTED, I put it there because the gripper is thick
             pose_goal.position.z = (ee_pose.position.z *2/ 3)     ### TO BE ADJUSTED
-            pose_goal.orientation.x = 0.073046
-            pose_goal.orientation.y = 0.99627
-            pose_goal.orientation.z = -0.040845
-            pose_goal.orientation.w = 0.020963
+
+            pose_goal.orientation = ee_pose.orientation
 
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
             result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)
@@ -325,15 +367,18 @@ class Movejoints(Node):
                 if abs(error_x) > 20:  # Adjust this threshold as needed
                     self.adjust_robot_position(error_x)
                     self.get_logger().info("Looping for alignment")  # Beware that there was an attempt in which here continous_process_after_alignment was called method was called
-                    self.move_ee_to_camera_pos()
-                    time.sleep(1.0)
-                    self.continue_process_after_alignment()
+                    #self.move_ee_to_camera_pos()
+                    #time.sleep(1.0)
+                    #self.continue_process_after_alignment()
                 else:
                     self.get_logger().info("Alignment within threshold, breaking loop")
                     self.alignment_within_threshold_event.set()  # Set the event to indicate alignment is within threshold
                     self.alignment_ok_event.set()  # Manually set the event to break the loop
                     # Now I have to cancel the timer
                     self.alignment_timer.cancel()
+                    self.move_ee_to_camera_pos()
+                    time.sleep(1.0)
+                    self.continue_process_after_alignment()
             else:
                 self.get_logger().info("Bounding box center not available")
 
@@ -361,7 +406,7 @@ class Movejoints(Node):
             # Calculate derivative term (rate of change of error)
             #delta_error_x = error_x - self.previous_error_x
 
-            adjustment = (-1) * Kp * error_x #+ Kd * delta_error_x
+            adjustment =  Kp * error_x #+ Kd * delta_error_x
 
             pose_goal.position.y = camera_pose.position.y + adjustment
 
@@ -375,7 +420,7 @@ class Movejoints(Node):
             print('Alignment adjustment on y to be made', adjustment)
 
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=2.0)
 
             robot_state.update()
 
@@ -448,6 +493,7 @@ class Movejoints(Node):
 def main(args=None):
     rclpy.init(args=args)
     storing_configurations_area = Movejoints()
+    #storing_configurations_area.move_above_card_rotation()
     
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(storing_configurations_area)

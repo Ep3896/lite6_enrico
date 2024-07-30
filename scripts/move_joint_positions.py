@@ -1,4 +1,18 @@
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from std_msgs.msg import Float32, Bool, Float32MultiArray, String
+from sensor_msgs.msg import JointState
+from threading import Event
+from geometry_msgs.msg import Pose
+from moveit.core.robot_state import RobotState
+from moveit.planning import MoveItPy
+from moveit_configs_utils import MoveItConfigsBuilder
+from ament_index_python.packages import get_package_share_directory
+import time
 import threading
+import robot_control
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 class Movejoints(Node):
 
@@ -39,7 +53,6 @@ class Movejoints(Node):
         self.depth_adjustment = None  # Initialize the depth adjustment variable
         self.previous_depth_adjustment = None  # Initialize the previous depth adjustment variable
         self.bbox_center = None  # Initialize bounding box center
-        self.bbox_center_lock = threading.Lock()  # Lock for bbox_center
         self.alignment_ok_event = Event()  # Initialize alignment event
         self.bbox_center_event = Event()  # Event to wait for bbox_center
         self.alignment_within_threshold_event = Event()  # Event to wait for alignment within threshold
@@ -69,8 +82,7 @@ class Movejoints(Node):
         self.get_logger().info(f'Initial distance y: {self.initial_distance_y}')
 
     def bbox_center_callback(self, msg):
-        with self.bbox_center_lock:
-            self.bbox_center = msg.data
+        self.bbox_center = msg.data
         self.bbox_center_event.set()  # Set the event when bbox_center is received
         self.get_logger().info(f'Received bounding box center: {self.bbox_center}')
 
@@ -295,16 +307,17 @@ class Movejoints(Node):
     def align_with_card_edge_callback(self):
         if not self.alignment_ok_event.is_set():
             self.get_logger().info("Aligning with card edge")
-            with self.bbox_center_lock:
-                bbox_center = self.bbox_center
+            if self.bbox_center:
 
-            if bbox_center:
-                bbox_center_x = bbox_center[0]
-                frame_center_x = 320   # In this case, frame width is 640 and height is 480
+                bbox_center_x = self.bbox_center[0]
+                frame_center_x = 320   # In this case, frame with is 640 and height is 480
                 error_x = frame_center_x - bbox_center_x
 
+
                 self.get_logger().info(f"Error in X axis: {error_x}")
-                self.get_logger().info(f"Bounding box center: {bbox_center}")
+                self.get_logger().info(f"Bounding box center: {self.bbox_center}")
+
+                time.sleep(1.0)
 
                 if abs(error_x) > 20:  # Adjust this threshold as needed
                     self.adjust_robot_position(error_x)
@@ -315,6 +328,7 @@ class Movejoints(Node):
                     self.alignment_ok_event.set()  # Manually set the event to break the loop
                     # Now I have to cancel the timer
                     self.alignment_timer.cancel()
+
             else:
                 self.get_logger().info("Bounding box center not available")
 
@@ -326,18 +340,20 @@ class Movejoints(Node):
             robot_state = scene.current_state
             camera_pose = robot_state.get_pose("camera_color_optical_frame")
             
+
             pose_goal = Pose()
             pose_goal.position.x = camera_pose.position.x   # Adjust scaling factor as needed
             pose_goal.position.z = camera_pose.position.z
-            # it can be positive or negative, depending on the error
-            # if the error is positive, the robot has to move to the left
-            # if the error is negative, the robot has to move to the right
+            # it can be posiive or negative, depending on the error
+            #if the error is positive, the robot has to move to the left
+            #if the error is negative, the robot has to move to the right
             # I also measure the difference between the previous error and the current one
             # So I can understand if the robot is moving in the right direction and if the error is decreasing, move slower
-            # I call Kd the scaling factor that is the difference between the previous error and the current one
+            # I call Kd the scaling factor that is the di
+            # fference between the previous error and the current one
             # Proportional-Derivative (PD) control law
-            Kp = 0.001  # Proportional gain, adjust as needed
-            Kd = 0.0001  # Derivative gain, adjust as needed
+            Kp = 0.0001  # Proportional gain, adjust as needed
+            Kd = 0.0  # Derivative gain, adjust as needed
                 
             # Calculate derivative term (rate of change of error)
             delta_error_x = error_x - self.previous_error_x
@@ -348,6 +364,7 @@ class Movejoints(Node):
 
             self.previous_error_x = error_x
 
+            
             pose_goal.orientation.x = camera_pose.orientation.x
             pose_goal.orientation.y = camera_pose.orientation.y
             pose_goal.orientation.z = camera_pose.orientation.z
@@ -364,6 +381,7 @@ class Movejoints(Node):
                 self._logger.error("IK solution was not found!")
                 return
             else:
+                plan = True
                 self.lite6_arm.set_goal_state(robot_state=robot_state)
                 robot_state.update()
                 robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)

@@ -82,6 +82,8 @@ class ControllerNode(Node):
         self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 100)
         self.bbox_area_pub = self.create_publisher(Float32, '/control/bbox_area', 10)
         self.bbox_area_old = 0
+        self.searching_card_pub = self.create_publisher(Bool, '/control/searching_card', 100)
+
 
     def initialize_control_variables(self):
         self.intrinsics = None
@@ -121,9 +123,17 @@ class ControllerNode(Node):
         self.depth_buffer = deque(maxlen=BUFFER_SIZE)
 
     def detections_callback(self, msg: DetectionArray):
+        card_detected = False
         for detection in msg.detections:
             if detection.class_name == 'CreditCard':  # Change based on the object to pick
+                card_detected = True
                 self.process_detection(detection)
+        if not card_detected:
+            self.get_logger().info('Credit Card not detected.')
+            self.searching_card_pub.publish(Bool(data=True))
+        else:
+            self.searching_card_pub.publish(Bool(data=False))
+
 
     def first_movement_callback(self, msg: Bool):
         self.first_movement = msg.data
