@@ -1,7 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from std_msgs.msg import Float32, Bool
+from std_msgs.msg import Float32, Bool, String
 from geometry_msgs.msg import Point, PointStamped
 from lite6_enrico_interfaces.action import GoToPose
 from yolov8_msgs.msg import DetectionArray
@@ -16,6 +16,7 @@ import sys
 from collections import deque
 import curses
 import cv2
+import os
 
 # PID gain values
 KP = 0.00005
@@ -77,6 +78,7 @@ class ControllerNode(Node):
         self.create_subscription(msg_Image, '/camera/camera/depth/image_rect_raw', self.depth_image_callback, 100) #it was 10 before
         self.create_subscription(CameraInfo, '/camera/camera/depth/camera_info', self.depth_info_callback, 10) #it was 10 before
         self.create_subscription(Bool, '/control/first_movement', self.first_movement_callback, 10)
+        self.create_subscription(String,'/control/obj_to_reach', self.obj_to_reach_callback, 10)
 
     def init_publishers(self):
         self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 100)
@@ -113,7 +115,7 @@ class ControllerNode(Node):
         self.clip_val = 10
 
         self.shutdown_flag = False
-        self.pick_card = True  # Change based on the object to pick
+        self.pick_card = False #True  # Starts with Credit Card
 
         # TF2 buffer and listener
         self.tf_buffer = tf2_ros.Buffer()
@@ -122,18 +124,67 @@ class ControllerNode(Node):
         # Depth buffer
         self.depth_buffer = deque(maxlen=BUFFER_SIZE)
 
+    def obj_to_reach_callback(self, msg: String):
+        if msg.data == 'CreditCard':
+            self.pick_card = True
+        elif msg.data == 'POS':
+            self.pick_card = False
+        else:
+            self.get_logger().info('Invalid object to reach.')
+
+    """
     def detections_callback(self, msg: DetectionArray):
         card_detected = False
+        pos_detected = False
         for detection in msg.detections:
-            if detection.class_name == 'CreditCard':  # Change based on the object to pick
+            if detection.class_name == 'CreditCard' and self.pick_card:  # Change based on the object to pick
                 card_detected = True
                 self.process_detection(detection)
-        if not card_detected:
+            elif detection.class_name == 'POS' and not self.pick_card:  # Change based on the object to pick
+                pos_detected = True
+                self.process_detection(detection)
+        if not card_detected and self.pick_card:
             self.get_logger().info('Credit Card not detected.')
             self.searching_card_pub.publish(Bool(data=True))
+        elif not pos_detected and not self.pick_card:
+            self.get_logger().info('POS not detected.')
+            #self.searching_card_pub.publish(Bool(data=True))
         else:
             self.searching_card_pub.publish(Bool(data=False))
+    """ 
+    def detections_callback(self, msg: DetectionArray):
+        if self.pick_card:
+            card_detected = False
+            for detection in msg.detections:
+                if detection.class_name == 'CreditCard':  # Change based on the object to pick
+                    card_detected = True
+                    self.process_detection(detection)
+            if not card_detected:
+                self.get_logger().info('Credit Card not detected.')
+                self.searching_card_pub.publish(Bool(data=True))
+            else:
+                self.searching_card_pub.publish(Bool(data=False))
+        else:
+            pos_detected = False
+            for detection in msg.detections:
+                if detection.class_name == 'POS':
+                    pos_detected = True
+                    self.searching_card_pub.publish(Bool(data=False))
+                    self.process_detection(detection)
+            if not pos_detected:
+                self.get_logger().info('POS not detected.')
 
+        """
+        if not card_detected:
+            self.get_logger().info('Credit Card not detected.')
+            if self.pick_card:
+                self.searching_card_pub.publish(Bool(data=True))
+            else:
+                self.searching_card_pub.publish(Bool(data=False))
+                self.process_detection(msg.detections[0])
+        else:
+            self.searching_card_pub.publish(Bool(data=False))
+        """
 
     def first_movement_callback(self, msg: Bool):
         self.first_movement = msg.data
@@ -355,15 +406,31 @@ class ControllerNode(Node):
         goal_msg.pose.position = target_position
 
         if not self.pick_card:
-            goal_msg.pose.orientation.x = -0.70388
-            goal_msg.pose.orientation.y = 0.70991
-            goal_msg.pose.orientation.z = -0.015868
-            goal_msg.pose.orientation.w = 0.018082
+            goal_msg.pose.orientation.x = 0.0#-0.70388
+            goal_msg.pose.orientation.y = 1.0 #0.70991
+            goal_msg.pose.orientation.z = 0.0 #-0.015868
+            goal_msg.pose.orientation.w = 0.0 #0.018082
+            goal_msg.pose.position.y = -target_position.y
+
         else:
             goal_msg.pose.orientation.x = 0.64135
             goal_msg.pose.orientation.y = 0.6065
             goal_msg.pose.orientation.z = 0.3936
             goal_msg.pose.orientation.w = -0.25673
+        
+        if not self.pick_card:
+            goal_filepath = os.path.expanduser("~/goal_pos.txt")
+            with open(goal_filepath, "w") as file:
+                file.write(f"Position:\n"
+                           f"  x: {goal_msg.pose.position.x}\n"
+                           f"  y: {goal_msg.pose.position.y}\n"
+                           f"  z: {goal_msg.pose.position.z}\n"
+                           f"Orientation:\n"
+                           f"  x: {goal_msg.pose.orientation.x}\n"
+                           f"  y: {goal_msg.pose.orientation.y}\n"
+                           f"  z: {goal_msg.pose.orientation.z}\n"
+                           f"  w: {goal_msg.pose.orientation.w}\n")
+            self.get_logger().info(f"Goal saved to {goal_filepath}")
 
         self._action_client.wait_for_server() # it was 0.1 before
         self._send_goal_future = self._action_client.send_goal_async(goal_msg)

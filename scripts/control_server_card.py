@@ -14,7 +14,7 @@ from moveit.planning import PlanRequestParameters
 import numpy as np
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Float32, String
 from sensor_msgs.msg import JointState
 import os
 import math
@@ -50,14 +50,17 @@ class GoToPoseActionServer(Node):
         
         self.stop_execution_sub = self.create_subscription(Bool, '/control/stop_execution', self.stop_execution_callback, 30)
         self.create_subscription(Float32, "/control/depth_adjustment", self.depth_adjustment_callback, 10)
-
+        self.create_subscription(String,'/control/obj_to_reach', self.obj_to_reach_callback, 10)
         self.searching_card_sub = self.create_subscription(Bool, '/control/searching_card', self.searching_card_callback, qos_profile=1, callback_group=movement_group)
 
+
         self.joint_states_pub = self.create_publisher(JointState, '/control/joint_states', 10)
+        self.pos_joint_positions_pub = self.create_publisher(JointState, '/control/pos_joint_positions', 10)
         self.first_movement_publisher = self.create_publisher(Bool, "/control/first_movement", 10)
         self.initial_distance_y_pub = self.create_publisher(Float32, "/control/initial_distance_y", 10)
+        self.stop_locked_movement_pub = self.create_publisher(Bool, '/control/stop_locked_movement', 10)
 
-        self.pick_card = True
+        self.pick_card = False #True
         self.first_movement = True
         self.initial_distance_y = 0.0
         self.distance_from_object = Float32()
@@ -88,6 +91,17 @@ class GoToPoseActionServer(Node):
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+    def obj_to_reach_callback(self, msg):
+        if msg.data == "POS":
+            self.pick_card = False
+            self.get_logger().info("Received object to reach: POS")
+            stop_msg = Bool()
+            stop_msg.data = True
+            self.stop_locked_movement_pub.publish(stop_msg)
+        else:
+            self.pick_card = True
+            self.get_logger().info("Received object to reach: CreditCard")
+
 
     # This function is called when the camera is searching for the card, it has to move the robot from the initial position
     # to the position where the camera can detect the card
@@ -98,48 +112,49 @@ class GoToPoseActionServer(Node):
             self._logger.info("NOT MOVING DUE TO STOP EXECUTION SIGNAL")
             return
         
+        if self.pick_card == True:
         # If the card is found and this is not the first movement, then the robot has to stop searching for the card
-        if self.camera_searching == False: #or not self.first_movement:
-            print("Card is found")
-            return
-        else:
-            self.get_logger().info('Searching for the card...')
-            planning_scene_monitor = self.lite6.get_planning_scene_monitor()
-            robot_state = RobotState(self.lite6.get_robot_model())
+            if self.camera_searching == False: #or not self.first_movement:
+                print("Card is found")
+                return
+            else:
+                self.get_logger().info('Searching for the card...')
+                planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+                robot_state = RobotState(self.lite6.get_robot_model())
 
-            with planning_scene_monitor.read_write() as scene:
-                robot_state = scene.current_state
-                ee_pose = robot_state.get_pose("camera_color_optical_frame")
+                with planning_scene_monitor.read_write() as scene:
+                    robot_state = scene.current_state
+                    ee_pose = robot_state.get_pose("camera_color_optical_frame")
 
-                pose_goal = Pose()
-                pose_goal.position.x = ee_pose.position.x + 0.005
-                pose_goal.position.y = ee_pose.position.y 
-                pose_goal.position.z = ee_pose.position.z
+                    pose_goal = Pose()
+                    pose_goal.position.x = ee_pose.position.x + 0.005
+                    pose_goal.position.y = ee_pose.position.y 
+                    pose_goal.position.z = ee_pose.position.z
 
-                pose_goal.orientation.x = 0.64135
-                pose_goal.orientation.y = 0.6065
-                pose_goal.orientation.z = 0.3936
-                pose_goal.orientation.w = -0.25673
+                    pose_goal.orientation.x = 0.64135
+                    pose_goal.orientation.y = 0.6065
+                    pose_goal.orientation.z = 0.3936
+                    pose_goal.orientation.w = -0.25673
 
 
-                original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
-                result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+                    original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                    result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
 
-                robot_state.update()
-
-                if not result:
-                    self._logger.error("IK solution was not found!")
-                    return
-                else:
-                    plan = True
-                    self.lite6_arm.set_goal_state(robot_state=robot_state)
                     robot_state.update()
-                    robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
-                    robot_state.update()
-            if plan:
-                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5) # it was 0.5 sleep time
-                updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
-                self.previous_position = updated_camera_position
+
+                    if not result:
+                        self._logger.error("IK solution was not found!")
+                        return
+                    else:
+                        plan = True
+                        self.lite6_arm.set_goal_state(robot_state=robot_state)
+                        robot_state.update()
+                        robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                        robot_state.update()
+                if plan:
+                    self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5) # it was 0.5 sleep time
+                    updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
+                    self.previous_position = updated_camera_position
 
 
 
@@ -152,10 +167,14 @@ class GoToPoseActionServer(Node):
         self.stop_execution = msg.data
         if self.stop_execution:
             # This is a blocking loop, I think it has to stay here until the robot has reached the ready position again after the pick
-            while True:
-                self.get_logger().info("Execution halted due to stop signal.")
-                time.sleep(1.0)
-            self._logger.info("Received stop execution signal. Halting operations.")
+            #while True:
+            #    self.get_logger().info("Execution halted due to stop signal.")
+            #    time.sleep(1.0)
+            # INSTEAD OF THIS, COULD I JUST RETURN?
+            robot_state = RobotState(self.lite6.get_robot_model())
+            self.previous_position = robot_state.get_pose("camera_color_optical_frame").position
+
+            return
 
 
 
@@ -208,16 +227,30 @@ class GoToPoseActionServer(Node):
                         joint_state_msg.position = joint_positions_list
 
                     self.joint_states_pub.publish(joint_state_msg)
-                
-                #### This is a bit ugly, but I need to publish the joint states 20 times to make sure the robot is in the correct position
-                self.count += 1
 
-                #while self.count == 20: # why do I need this counter? is it necessary?
-                ##    self.joint_states_pub.publish(joint_state_msg)
-                #    time.sleep(5.0)
-                #    print("SLEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEPPPPPPPPPPPPPPPPPPPPPIIIIIIIIIIIIIIIIIIIIIIIINNNNNNG")
-                if self.count ==20:
-                    return
+            elif not self.pick_card:
+                # What do I have to do here?
+                # 1) Publish the joint states to a new node that will find the best position for the camera to align with the POS object
+                # 2) After that, the new node will publish a stop message to this node, so this node will stop the execution
+                print("Publishing joint states for the POS object")
+                # Publish joint states after executing the plan
+                planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+                with planning_scene_monitor.read_only() as scene:
+                    robot_state_to_publish = scene.current_state
+                    robot_state_to_publish.update()
+
+                    joint_state_msg = JointState()
+                    joint_state_msg.header.stamp = self.get_clock().now().to_msg()
+                    joint_state_msg.name = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+                    
+                    joint_positions = robot_state_to_publish.get_joint_group_positions('lite6_arm')
+
+                    if joint_positions is not None:
+                        joint_positions_list = []
+                        for pos in joint_positions:
+                            joint_positions_list.append(pos)
+                        joint_state_msg.position = joint_positions_list
+                    self.joint_states_pub.publish(joint_state_msg)
 
         else:
             logger.error("Planning failed")
@@ -295,19 +328,18 @@ class GoToPoseActionServer(Node):
             if self.first_movement:  # First movement of the robot for reaching an object, then it aligns with the object
                 print("First movement")
                 if not self.pick_card:
-                    movz = 0.15
+                    movz = 0.2  #################### FOR THE POS OBJECT, this has to be changed, I think it would be good to read the depth from the camera sensor.
                 else:
                     movz = max(movz, 0.15)
                     movy = movy - 0.1 #0.12 was good # this 0.1 has been done beacuse the camera has to be a bit distant from the object , otherwise it will not detect it
-                    #time.sleep(1.0)
-                #self.previous_position = check_init_pose.position  ###### MAYBE THIS IS NOT NEEDED
 
-            else:  # Aligning the robot with the object
+            else:                   # Aligning the robot with the object
 
                 if self.pick_card:  # For CreditCard
                     movy = check_init_pose.position.y
-                else:  # For POS object
+                else:               # For POS object
                     movy = check_init_pose.position.y + (movy - self.previous_position.y)
+
 
                 # Update movz conditionally
                 if movz > MIN_DISTANCE_FROM_OBJECT and not self.pick_card:  # For Pos object
@@ -321,7 +353,7 @@ class GoToPoseActionServer(Node):
                 dist_z = abs(movz - self.previous_position.z)
 
                 if dist_x > MAX_MOVEMENT_THRESHOLD and not self.pick_card:
-                    movx = self.previous_position.x + (MAX_MOVEMENT_THRESHOLD if movx > self.previous_position.x else -MAX_MOVEMENT_THRESHOLD)
+                    movx = self.previous_position.x + (-MAX_MOVEMENT_THRESHOLD if movx > self.previous_position.x else MAX_MOVEMENT_THRESHOLD)
                 elif self.pick_card:
                     movx = self.previous_position.x + (-MAX_MOVEMENT_THRESHOLD / 2 if movx > self.previous_position.x else MAX_MOVEMENT_THRESHOLD / 2) ###CHANGED THE SIGN
 
@@ -335,7 +367,7 @@ class GoToPoseActionServer(Node):
             movx = min(max(movx, 0.0), 0.45)
             movy = min(max(movy, -0.3), 0.45)
             if not self.pick_card:
-                movz = min(max(movz, MINIMUM_DEPTH_DISTANCE), 0.40)
+                movz = min(max(movz, 0.30), 0.30)
             else:
                 movz = min(max(movz, 0.15), 0.40)
 

@@ -30,6 +30,8 @@ class CameraManager(Node):
         self.create_subscription(Bool, '/control/start_template_matching', self.start_template_matching_callback, 10)
         self.create_subscription(Bool, '/control/start_card_edge_detection', self.start_card_edge_detection_callback, 10)
 
+        self.prompt_publisher=self.create_publisher(Bool, '/control/start_moving_along_y', 10)
+
     def start_pointcloud_callback(self, msg):
         if msg.data:
             self.start_rs_pointcloud()
@@ -39,6 +41,11 @@ class CameraManager(Node):
     def start_template_matching_callback(self, msg):
         if msg.data:
             self.start_template_matching()
+            move_along_y_msg = Bool()
+            move_along_y_msg.data = True
+            self.get_logger().info('Publishing start_moving_along_y')
+            self.prompt_publisher.publish(move_along_y_msg)
+
         else:
             self.stop_template_matching()
 
@@ -122,6 +129,8 @@ class CameraManager(Node):
             self.stop_card_edge_detection()
         release_device('/dev/video4')
         time.sleep(2)  # Add delay to ensure the device is properly released
+
+
 
 def main(args=None):
     rclpy.init(args=args)

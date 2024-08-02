@@ -1,82 +1,110 @@
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float32, Float32MultiArray, Bool
 import cv2
 import numpy as np
 
-def detect_logo_from_webcam(template_path, webcam_channel, threshold, scales):
-    # Load the template image
-    template = cv2.imread(template_path, 0)  # Template image in grayscale
-    if template is None:
-        print(f"Error: Unable to load template image from {template_path}")
-        return
+class TemplateMatchingNode(Node):
 
-    template_height, template_width = template.shape
+    def __init__(self):
+        super().__init__('template_matching_node')
+        self.template_path = '/path/to/template.png'
+        self.webcam_channel = 4
+        self.threshold = 0.5
+        self.scales = np.linspace(0.5, 2.0, 30)
+        
+        self.depth_pub = self.create_publisher(Float32, '/control/depth_at_centroid', 10)
+        self.bbox_center_pub = self.create_publisher(Float32MultiArray, '/control/bbox_center', 10)
+        self.moving_along_y_pub = self.create_publisher(Bool, '/control/start_moving_along_y', 10)
+        
+        self.detect_logo_from_webcam()
 
-    # Apply Gaussian Blur to the template to make it less precise
-    template = cv2.GaussianBlur(template, (7, 7), 0)
+    def detect_logo_from_webcam(self):
+        template = cv2.imread(self.template_path, 0)
+        if template is None:
+            self.get_logger().error(f"Unable to load template image from {self.template_path}")
+            return
 
-    # Open the webcam
-    cap = cv2.VideoCapture(webcam_channel)
-    if not cap.isOpened():
-        print(f"Error: Could not open webcam with index {webcam_channel}.")
-        return
+        template_height, template_width = template.shape
+        template = cv2.GaussianBlur(template, (7, 7), 0)
 
-    while True:
-        # Read a frame from the webcam
-        ret, frame = cap.read()
-        if not ret:
-            print("Error: Failed to read frame from webcam.")
-            break
+        cap = cv2.VideoCapture(self.webcam_channel)
+        if not cap.isOpened():
+            self.get_logger().error(f"Could not open webcam with index {self.webcam_channel}")
+            return
 
-        # Convert the frame to grayscale
-        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                self.get_logger().error("Failed to read frame from webcam")
+                break
 
-        # Apply Gaussian Blur to the frame to make it less precise
-        gray_frame = cv2.GaussianBlur(gray_frame, (7, 7), 0)
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray_frame = cv2.GaussianBlur(gray_frame, (7, 7), 0)
+            frame_height, frame_width = gray_frame.shape
 
-        frame_height, frame_width = gray_frame.shape
+            best_match_val = -1
+            best_match_loc = None
+            best_match_scale = None
 
-        best_match_val = -1
-        best_match_loc = None
-        best_match_scale = None
+            for scale in self.scales:
+                resized_template = cv2.resize(template, (int(template_width * scale), int(template_height * scale)))
+                if resized_template.shape[0] > frame_height or resized_template.shape[1] > frame_width:
+                    continue
 
-        # Loop over different scales of the template
-        for scale in scales:
-            resized_template = cv2.resize(template, (int(template_width * scale), int(template_height * scale)))
-            resized_template_height, resized_template_width = resized_template.shape
+                res = cv2.matchTemplate(gray_frame, resized_template, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-            # Ensure the resized template is smaller than the frame
-            if resized_template_height > frame_height or resized_template_width > frame_width:
-                continue
+                if max_val > best_match_val:
+                    best_match_val = max_val
+                    best_match_loc = max_loc
+                    best_match_scale = scale
 
-            res = cv2.matchTemplate(gray_frame, resized_template, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+            if best_match_val >= self.threshold:
+                top_left = best_match_loc
+                bottom_right = (int(top_left[0] + template_width * best_match_scale), int(top_left[1] + template_height * best_match_scale))
+                cv2.rectangle(frame, top_left, bottom_right, (0, 255, 0), 2)
 
-            if max_val > best_match_val:
-                best_match_val = max_val
-                best_match_loc = max_loc
-                best_match_scale = scale
+                centroid_x = (top_left[0] + bottom_right[0]) / 2
+                centroid_y = (top_left[1] + bottom_right[1]) / 2
+                bbox_center = Float32MultiArray(data=[centroid_x, centroid_y])
+                self.bbox_center_pub.publish(bbox_center)
 
-        # Only draw bounding boxes for scales >= 0.9
-        if best_match_val >= threshold and best_match_scale >= 0.9:
-            top_left = best_match_loc
-            bottom_right = (int(top_left[0] + template_width * best_match_scale), int(top_left[1] + template_height * best_match_scale))
-            cv2.rectangle(frame, top_left, bottom_right, (0, 255, 0), 2)
-            cv2.putText(frame, f'Scale: {best_match_scale:.2f}', (top_left[0], top_left[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                frame_center_x = frame_width / 2
+                frame_center_y = frame_height / 2
+                distance_x = frame_center_x - centroid_x
+                distance_y = frame_center_y - centroid_y
+                adjustment = 0.001 * np.array([distance_x, distance_y])  # Scale as needed
+                self.adjust_robot_position(adjustment)
 
-        # Display the frame with detected logos
-        cv2.imshow('Detected Logo', frame)
+                depth_at_centroid = self.get_depth_at_centroid(centroid_x, centroid_y)
+                self.depth_pub.publish(Float32(data=depth_at_centroid))
 
-        # Break the loop if 'q' key is pressed
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+                # Publish False to /control/start_moving_along_y once bounding box is generated
+                self.moving_along_y_pub.publish(Bool(data=False))
 
-    # Release the webcam and close windows
-    cap.release()
-    cv2.destroyAllWindows()
+            cv2.imshow('Detected Logo', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+    def get_depth_at_centroid(self, x, y):
+        # Implement depth extraction logic here
+        depth = 0.0  # Replace with actual depth value
+        return depth
+
+    def adjust_robot_position(self, adjustment):
+        # Implement robot position adjustment here
+        pass
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = TemplateMatchingNode()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
-    template_path = '/home/lite6/Desktop/Piacenti/2.Vision/3.Training/9.Training_10_07/Shape_Detector/pos_real_logo1.png'
-    webcam_channel = 4  # You may need to adjust this index based on your setup
-    threshold = 0.5
-    scales = np.linspace(0.5, 2.0, 30)
-    detect_logo_from_webcam(template_path, webcam_channel, threshold, scales)
-
+    main()

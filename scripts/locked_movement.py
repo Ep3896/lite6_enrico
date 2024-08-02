@@ -48,11 +48,13 @@ class Movejoints(Node):
         self.create_subscription(Float32, '/control/depth_adjustment', self.depth_adjustment_callback, 100)
         self.create_subscription(Float32MultiArray, '/control/bbox_center', self.bbox_center_callback, 10)
         self.create_subscription(Bool, '/control/alignment_status', self.alignment_status_callback, 10)
+        self.create_subscription(Bool, '/control/stop_locked_movement', self.stop_locked_movement_callback, 10)
 
         self.stop_execution_pub = self.create_publisher(Bool, '/control/stop_execution', 30)
         self.pointcloud_pub = self.create_publisher(Bool, '/control/start_pointcloud', 10)
         self.template_matching_pub = self.create_publisher(Bool, '/control/start_template_matching', 10)
         self.card_edge_detection_pub = self.create_publisher(Bool, '/control/start_card_edge_detection', 10)
+        self.object_to_reach_pub = self.create_publisher(String, '/control/obj_to_reach', 10)
         
         self.current_joint_states = None
         self.initial_distance_y = None
@@ -69,6 +71,7 @@ class Movejoints(Node):
         self.first_alignment = True
 
         self.previous_error_x = 0
+        self.stop_locked_movement = False
 
         # Timer to print joint positions periodically
         #self.timer = self.create_timer(0.5, self.print_joint_positions) #it was 1.0
@@ -108,6 +111,11 @@ class Movejoints(Node):
             self.alignment_ok_event.clear()  # Clear the event otherwise
             self.get_logger().info("Alignment OK event cleared")
 
+    def stop_locked_movement_callback(self, msg):
+        self.stop_locked_movement = msg.data
+        if self.stop_locked_movement:
+            self.get_logger().info("Received stop locked movement signal.")
+
     def print_joint_positions(self):
         if self.current_joint_states:
             joint_positions = list(self.current_joint_states.position)
@@ -116,7 +124,7 @@ class Movejoints(Node):
             self.get_logger().info('Joint positions not available yet.')
 
     def bbox_area_callback(self, msg):
-        if self.current_joint_states:
+        if self.current_joint_states and not self.stop_locked_movement:
             joint_positions = list(self.current_joint_states.position)
             bbox_area = msg.data
             self.align_positions.append((joint_positions, bbox_area))
@@ -125,7 +133,7 @@ class Movejoints(Node):
             print('Dimensione align_positions', len(self.align_positions))
             print('                            ')
 
-            if len(self.align_positions) >= 3:
+            if len(self.align_positions) >= 3 and not self.stop_locked_movement:
                 self.get_logger().info(f'Buffer size is {len(self.align_positions)}, selecting max area configuration')
                 stop_msg = Bool()
                 stop_msg.data = True
@@ -188,9 +196,21 @@ class Movejoints(Node):
         time.sleep(1.5)
         self.store_card_position()
         time.sleep(1.5)
-        self.move_to_ready_position(position_name="Ready")
-        time.sleep(1.5)
-        self.mv_to_card_position()
+        self.move_to_ready_position(position_name="PosSearching")
+        #time.sleep(1.5)
+        #self.mv_to_card_position()
+        ######################## HERE I HAVE TO PUBLSISH TO /CONTROL/OBJ_TO_REACH IN ORDER TO REACH THE POS AND START THE TEMPLATE MATCHING
+        # Unblock the cotrol_server_card node
+        stop_msg = Bool()
+        stop_msg.data = False
+        self.stop_execution_pub.publish(stop_msg)
+        # Search for POS
+        object_to_reach_msg = String()
+        object_to_reach_msg.data = "POS"
+        self.object_to_reach_pub.publish(object_to_reach_msg)
+        # I also need to start again the pointcloud to detect the POS
+        self.pointcloud_pub.publish(Bool(data=True))
+
 
     def move_ee_to_camera_pos(self):
         self.get_logger().info("Moving EE to camera position")
@@ -327,9 +347,9 @@ class Movejoints(Node):
             ee_pose = robot_state.get_pose("link_tcp")
 
             pose_goal = Pose()
-            pose_goal.position.x = ee_pose.position.x + 0.02
-            pose_goal.position.y = ee_pose.position.y  ### TO BE ADJUSTED, I put it there because the gripper is thick
-            pose_goal.position.z = (ee_pose.position.z *2/ 3)     ### TO BE ADJUSTED
+            pose_goal.position.x = ee_pose.position.x #+ 0.02
+            pose_goal.position.y = ee_pose.position.y  
+            pose_goal.position.z = ee_pose.position.z - 0.05   ### This can be retrieved by looking at the depth in the pixel that show the board
 
             pose_goal.orientation = ee_pose.orientation
 
@@ -383,6 +403,10 @@ class Movejoints(Node):
                 self.get_logger().info("Bounding box center not available")
 
     def adjust_robot_position(self, error_x):
+        if self.stop_locked_movement:
+            self.get_logger().info("Adjust movement halted due to stop signal.")
+            return
+
         planning_scene_monitor = self.lite6.get_planning_scene_monitor()
         robot_state = RobotState(self.lite6.get_robot_model())
 
@@ -471,6 +495,10 @@ class Movejoints(Node):
             self.get_logger().info("Robot moved to the card position")
 
     def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None):
+        if self.stop_locked_movement:
+            logger.info("Execution halted due to stop signal.")
+            return
+
         logger.info("Planning trajectory")
 
         if multi_plan_parameters is not None:
@@ -481,6 +509,9 @@ class Movejoints(Node):
             plan_result = planning_component.plan()
 
         if plan_result:
+            if self.stop_locked_movement:
+                logger.info("Execution halted due to stop signal after planning.")
+                return
             logger.info("Executing plan")
             robot_trajectory = plan_result.trajectory
             robot.execute(robot_trajectory, controllers=[])
