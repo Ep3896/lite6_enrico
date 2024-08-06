@@ -83,7 +83,8 @@ class CameraManager(Node):
             self.get_logger().info('Waiting for device /dev/video4 to become available...')
             release_device('/dev/video4')
             time.sleep(1)
-        script_path = os.path.expanduser('/home/lite6/Desktop/Piacenti/2.Vision/3.Training/9.Training_10_07/Shape_Detector/template_matching.py')
+        #script_path = os.path.expanduser('/home/lite6/Desktop/Piacenti/2.Vision/3.Training/9.Training_10_07/Shape_Detector/template_matching.py')
+        script_path = os.path.expanduser('/home/lite6/ros2_ws/ws_moveit2/src/lite6_enrico/vision/template_matching.py')
         self.process = Popen(['python3', script_path])
         self.current_mode = 'template_matching'
 

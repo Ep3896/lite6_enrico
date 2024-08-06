@@ -8,7 +8,7 @@ class TemplateMatchingNode(Node):
 
     def __init__(self):
         super().__init__('template_matching_node')
-        self.template_path = '/path/to/template.png'
+        self.template_path = '/home/lite6/Desktop/Piacenti/2.Vision/3.Training/9.Training_10_07/Shape_Detector/pos_real_logo1.png'
         self.webcam_channel = 4
         self.threshold = 0.5
         self.scales = np.linspace(0.5, 2.0, 30)
@@ -26,7 +26,7 @@ class TemplateMatchingNode(Node):
             return
 
         template_height, template_width = template.shape
-        template = cv2.GaussianBlur(template, (7, 7), 0)
+        template = cv2.GaussianBlur(template, (3, 3), 0) # it was 7,7
 
         cap = cv2.VideoCapture(self.webcam_channel)
         if not cap.isOpened():
@@ -40,7 +40,7 @@ class TemplateMatchingNode(Node):
                 break
 
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray_frame = cv2.GaussianBlur(gray_frame, (7, 7), 0)
+            gray_frame = cv2.GaussianBlur(gray_frame, (3, 3), 0) # It was 7,7
             frame_height, frame_width = gray_frame.shape
 
             best_match_val = -1
@@ -77,8 +77,9 @@ class TemplateMatchingNode(Node):
                 adjustment = 0.001 * np.array([distance_x, distance_y])  # Scale as needed
                 self.adjust_robot_position(adjustment)
 
-                depth_at_centroid = self.get_depth_at_centroid(centroid_x, centroid_y)
-                self.depth_pub.publish(Float32(data=depth_at_centroid))
+                # Commenting out depth_at_centroid until get_depth_at_centroid is implemented
+                # depth_at_centroid = self.get_depth_at_centroid(centroid_x, centroid_y)
+                # self.depth_pub.publish(Float32(data=depth_at_centroid))
 
                 # Publish False to /control/start_moving_along_y once bounding box is generated
                 self.moving_along_y_pub.publish(Bool(data=False))
@@ -90,10 +91,12 @@ class TemplateMatchingNode(Node):
         cap.release()
         cv2.destroyAllWindows()
 
+    """
     def get_depth_at_centroid(self, x, y):
         # Implement depth extraction logic here
         depth = 0.0  # Replace with actual depth value
         return depth
+    """
 
     def adjust_robot_position(self, adjustment):
         # Implement robot position adjustment here
