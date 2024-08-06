@@ -60,7 +60,7 @@ class GoToPoseActionServer(Node):
         self.initial_distance_y_pub = self.create_publisher(Float32, "/control/initial_distance_y", 10)
         self.stop_locked_movement_pub = self.create_publisher(Bool, '/control/stop_locked_movement', 10)
 
-        self.pick_card = False #True
+        self.pick_card = True
         self.first_movement = True
         self.initial_distance_y = 0.0
         self.distance_from_object = Float32()

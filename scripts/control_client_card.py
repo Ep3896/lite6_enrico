@@ -115,7 +115,7 @@ class ControllerNode(Node):
         self.clip_val = 10
 
         self.shutdown_flag = False
-        self.pick_card = False #True  # Starts with Credit Card
+        self.pick_card = True  # Starts with Credit Card
 
         # TF2 buffer and listener
         self.tf_buffer = tf2_ros.Buffer()
