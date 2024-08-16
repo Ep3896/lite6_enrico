@@ -6,7 +6,7 @@ from sensor_msgs.msg import JointState
 from threading import Event
 from geometry_msgs.msg import Pose
 from moveit.core.robot_state import RobotState
-from moveit.planning import MoveItPy
+from moveit.planning import MoveItPy, MultiPipelinePlanRequestParameters
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
 import time
@@ -19,6 +19,11 @@ from scipy.spatial.transform import Rotation as R
 from tf2_ros import Buffer, TransformListener
 from tf2_geometry_msgs import do_transform_pose
 from geometry_msgs.msg import TransformStamped
+from moveit_msgs.msg import Constraints, JointConstraint
+from moveit.core.collision_detection import CollisionRequest, CollisionResult
+from moveit.core.planning_scene import PlanningScene
+
+
 
 class Movejoints(Node):
 
@@ -168,8 +173,8 @@ class Movejoints(Node):
             self.get_logger().info("Robot moved to the selected configuration")
             time.sleep(1.5)
             self.get_logger().info("Moving above card")
-            self.move_above_card_translation()
-            time.sleep(1.5)
+            #self.move_above_card_translation()
+            #time.sleep(1.5)
             self.move_above_card_rotation()
             # Start the alignment timer
             self.alignment_ok_event.clear()
@@ -243,8 +248,13 @@ class Movejoints(Node):
                 robot_state.update()
                 robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
                 robot_state.update()
+        
+        # initialise multi-pipeline plan request parameters
+        multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+        self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+        )
         if plan:
-            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
 
     def move_above_card_translation(self):
         self.get_logger().info("Moving EE above card")
@@ -290,7 +300,7 @@ class Movejoints(Node):
                 robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
                 robot_state.update()
         if plan:
-            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=1.5)
 
 
     def move_above_card_rotation(self):
@@ -306,7 +316,16 @@ class Movejoints(Node):
             pose_goal = Pose()
             pose_goal.position.x = camera_pose.position.x 
             pose_goal.position.y = camera_pose.position.y  # Adjust using depth adjustment value
-            pose_goal.position.z = camera_pose.position.z  # Adjust using depth adjustment value
+
+            if self.depth_adjustment is not None:
+                pose_goal.position.y += self.depth_adjustment
+            else:
+                if self.previous_depth_adjustment is not None:
+                    pose_goal.position.y += self.previous_depth_adjustment
+                else:
+                    self.get_logger().warning('Depth adjustment not available')
+
+            pose_goal.position.z = camera_pose.position.z + 0.05 # Adjust using depth adjustment value
 
             # -0.71, 0.71, -0.02, 0.02
             pose_goal.orientation.x = -0.71
@@ -316,23 +335,89 @@ class Movejoints(Node):
             
             robot_state.update()
 
+            
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
-            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+            #result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=60.0)
+            
 
-            robot_state.update()
+            ##################### I must check joint two of the new robot state, if joint 2 is less than 1.0, I have to recompute the IK solution
 
-            if not result:
-                self._logger.error("IK solution was not found!")
+
+            # Loop to find a valid IK solution where joint2 >= 1.0
+            max_attempts = 100  # To prevent infinite loops, limit the number of attempts
+            attempts = 0
+            valid_solution = False
+
+            while attempts < max_attempts:
+                # Perturb or randomize the robot state before each attempt
+                robot_state.set_to_random_positions()
+                robot_state.update()
+
+                result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=5.0)
+                joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                joint2_position = joint_positions[1]  # Assuming joint2 is at index 1
+                time.sleep(5.0)
+
+                if result and joint2_position <= 1.0:
+                    valid_solution = True
+                    break  # Valid solution found, exit the loop
+                else:
+                    self.get_logger().info(f"Invalid IK solution with joint2 = {joint2_position}. Retrying...")
+
+                attempts += 1
+
+            #robot_state.update()
+
+            if not valid_solution:
+                self._logger.error("Failed to find a valid IK solution with joint2 >= 1.0 after multiple attempts.")
                 return
             else:
                 plan = True
                 self.lite6_arm.set_goal_state(robot_state=robot_state)
+
+                ################
+                """
+                collision_request = CollisionRequest()
+                collision_result = CollisionResult()
+                #self.lite6.get_planning_component("lite6_arm").get_planning_scene().check_self_collision(collision_request, collision_result)
+                planning_scene = PlanningScene(self.lite6.get_robot_model())
+                planning_scene.check_self_collision(collision_request, collision_result, robot_state)
+                if collision_result.collision:
+                    self.get_logger().info("Self-collision detected")
+                    rclpy.shutdown()
+                    # Handle the collision scenario, e.g., stopping the robot
+                else:
+                    self.get_logger().info("No self-collision detected")
+
+                rclpy.shutdown()
+                """
+                ################
+
+
                 robot_state.update()
                 robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
                 robot_state.update()
+
+            constraints = Constraints()
+            constraints.name = "joints_constraints"
+
+            joint_2_constraint = JointConstraint()
+            joint_2_constraint.joint_name = "joint2"
+            joint_2_constraint.position = original_joint_positions[1]
+            joint_2_constraint.tolerance_above = 1.5   # Upper limit = Desired value + Tolerance above, this is the one that prevents the collision between link 3 aand robot base
+            joint_2_constraint.tolerance_below = 1.5   # Lower limit = Desired value − Tolerance below
+            joint_2_constraint.weight = 1.0
+            constraints.joint_constraints.append(joint_2_constraint)
+            
+            # Before all the blocks of code before if plan was tabbed on the left
+            # initialise multi-pipeline plan request parameters
+            multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+            self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+            )
+
+
         if plan:
-            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
-        
+            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, constraints=constraints ,multi_plan_parameters=multi_pipeline_plan_request_params)#, constraints=constraints)
         # Switch to card edge detection after moving above card
         self.pointcloud_pub.publish(Bool(data=False))
         self.card_edge_detection_pub.publish(Bool(data=True))
@@ -494,12 +579,16 @@ class Movejoints(Node):
             self.lite6.execute(robot_trajectory, controllers=[])
             self.get_logger().info("Robot moved to the card position")
 
-    def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None):
+    def plan_and_execute(self, robot, planning_component, logger, sleep_time, constraints=None,single_plan_parameters=None, multi_plan_parameters=None):
         if self.stop_locked_movement:
             logger.info("Execution halted due to stop signal.")
             return
 
         logger.info("Planning trajectory")
+    
+        if constraints is not None:
+            print('Constraints AAAAAAAAAAAAAAAAAAAAAAAAAAAAA', constraints)
+            planning_component.set_path_constraints(constraints)
 
         if multi_plan_parameters is not None:
             plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)

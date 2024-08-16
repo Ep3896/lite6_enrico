@@ -52,7 +52,7 @@ class GoToPoseActionServer(Node):
         self.create_subscription(Float32, "/control/depth_adjustment", self.depth_adjustment_callback, 10)
         self.create_subscription(String,'/control/obj_to_reach', self.obj_to_reach_callback, 10)
         self.searching_card_sub = self.create_subscription(Bool, '/control/searching_card', self.searching_card_callback, qos_profile=1, callback_group=movement_group)
-
+        self.create_subscription(Point, '/control/bounding_box_center', self.bounding_box_center_callback, 10)
 
         self.joint_states_pub = self.create_publisher(JointState, '/control/joint_states', 10)
         self.pos_joint_positions_pub = self.create_publisher(JointState, '/control/pos_joint_positions', 10)
@@ -66,6 +66,7 @@ class GoToPoseActionServer(Node):
         self.distance_from_object = Float32()
         self.count = 0
         self.stop_execution = False
+        self.bounding_box_center = Point(x=0.0, y=200.0, z=0.0)
 
         self.camera_searching = True
 
@@ -90,6 +91,9 @@ class GoToPoseActionServer(Node):
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+    def bounding_box_center_callback(self, msg):
+        self.bounding_box_center = msg
 
     def obj_to_reach_callback(self, msg):
         if msg.data == "POS":
@@ -127,7 +131,21 @@ class GoToPoseActionServer(Node):
                     ee_pose = robot_state.get_pose("camera_color_optical_frame")
 
                     pose_goal = Pose()
-                    pose_goal.position.x = ee_pose.position.x + 0.005
+
+
+                    # Retrieve the y-coordinate of the centroid of the object last seen
+                    centroid_y = self.bounding_box_center.y  # Assuming bounding_box_center stores [x, y]
+                    print("Centroid y: ", centroid_y)
+
+                    # Adjust pose_goal.position.x based on centroid_y value
+                    if centroid_y < 200:
+                        pose_goal.position.x = ee_pose.position.x - 0.005
+                        print("Moving to the left")
+                    else:
+                        pose_goal.position.x = ee_pose.position.x + 0.005
+                        print("Moving to the right")
+                    #### It has to be added here a condition so if the last centroid seen is 
+                    #pose_goal.position.x = ee_pose.position.x + 0.005
                     pose_goal.position.y = ee_pose.position.y 
                     pose_goal.position.z = ee_pose.position.z
 
@@ -391,13 +409,7 @@ class GoToPoseActionServer(Node):
             constraints.name = "joints_constraints"
 
             if orientation.x == 0.64135:  # CreditCard
-                joint_4_constraint = JointConstraint()
-                joint_4_constraint.joint_name = "joint4"
-                joint_4_constraint.position = original_joint_positions[3]
-                joint_4_constraint.tolerance_above = 1.5
-                joint_4_constraint.tolerance_below = 1.5
-                joint_4_constraint.weight = 1.0
-                constraints.joint_constraints.append(joint_4_constraint)
+
 
                 joint_5_constraint = JointConstraint()
                 joint_5_constraint.joint_name = "joint5"

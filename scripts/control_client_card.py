@@ -83,6 +83,7 @@ class ControllerNode(Node):
     def init_publishers(self):
         self.depth_adjustment_pub = self.create_publisher(Float32, '/control/depth_adjustment', 100)
         self.bbox_area_pub = self.create_publisher(Float32, '/control/bbox_area', 10)
+        self.bounding_box_center_pub = self.create_publisher(Point, '/control/bounding_box_center', 10)
         self.bbox_area_old = 0
         self.searching_card_pub = self.create_publisher(Bool, '/control/searching_card', 100)
 
@@ -195,6 +196,8 @@ class ControllerNode(Node):
 
         self.bbox_area = detection.bbox.size.x * detection.bbox.size.y
         self.bounding_box_center = [bbox_center_x, bbox_center_y]
+
+        self.bounding_box_center_pub.publish(Point(x=bbox_center_x, y=bbox_center_y, z=0.0))
 
         self.update_print_info("bounding_box_center_x", bbox_center_x)
         self.update_print_info("bounding_box_center_y", bbox_center_y)
