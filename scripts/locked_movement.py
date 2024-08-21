@@ -78,6 +78,9 @@ class Movejoints(Node):
         self.previous_error_x = 0
         self.stop_locked_movement = False
 
+        self.attempts = 1
+        self.x_movement = 0.0
+
         # Timer to print joint positions periodically
         #self.timer = self.create_timer(0.5, self.print_joint_positions) #it was 1.0
 
@@ -228,20 +231,55 @@ class Movejoints(Node):
             camera_pose = robot_state.get_pose("camera_color_optical_frame") #camera_color_optical_frame
 
             pose_goal = Pose()
+            """
+            ###### Maybe it is better to refactor it so 
+            if camera_pose.position.x > 0.35: #When the card is a bit far away from the robot link, it is better to change the way to catch the card
+                pose_goal.position.x = camera_pose.position.x + 0.03
+                pose_goal.position.y = camera_pose.position.y
+                pose_goal.position.z = ee_pose.position.z
+
+                pose_goal.orientation.x = 0.707
+                pose_goal.orientation.y = 0.0
+                pose_goal.orientation.z = 0.707
+                pose_goal.orientation.w = 0.0
+            else:
+                pose_goal.position.x = camera_pose.position.x + 0.03
+                pose_goal.position.y = camera_pose.position.y
+                pose_goal.position.z = ee_pose.position.z
+
+                pose_goal.orientation = ee_pose.orientation
+            """
             pose_goal.position.x = camera_pose.position.x + 0.03
             pose_goal.position.y = camera_pose.position.y
             pose_goal.position.z = ee_pose.position.z
 
             pose_goal.orientation = ee_pose.orientation
-
+          
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
             result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=2.0)
 
             robot_state.update()
 
-            if not result:
-                self._logger.error("IK solution was not found!")
-                return
+            while not result : #and camera_pose.position.x > 0.3:
+                self._logger.error("IK solution was not found, changing grasping pose")
+
+                pose_goal.position.x = camera_pose.position.x + 0.03
+                pose_goal.position.y = camera_pose.position.y
+                pose_goal.position.z = ee_pose.position.z
+ 
+                pose_goal.orientation.x = 0.707
+                pose_goal.orientation.y = 0.0
+                pose_goal.orientation.z = 0.707
+                pose_goal.orientation.w = 0.0
+
+                original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=2.0)
+
+                robot_state.update()
+
+                if not result:
+                    self._logger.error("IK solution was not found despite changing the grasping pose")
+                    return
             else:
                 plan = True
                 self.lite6_arm.set_goal_state(robot_state=robot_state)
@@ -345,28 +383,48 @@ class Movejoints(Node):
 
             # Loop to find a valid IK solution where joint2 >= 1.0
             max_attempts = 100  # To prevent infinite loops, limit the number of attempts
-            attempts = 0
             valid_solution = False
 
-            while attempts < max_attempts:
+            while self.attempts < max_attempts:
                 # Perturb or randomize the robot state before each attempt
-                robot_state.set_to_random_positions()
+                # Instead of set_to_random_positions(), perturb around the current state
+                joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                
+                print('Attempt', self.attempts)
+
+                if self.attempts < 10:
+                    robot_state = scene.current_state
+                else:
+                    robot_state.set_to_random_positions()
+                
                 robot_state.update()
 
+                # Attempt to solve IK with the perturbed joint positions
                 result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=5.0)
                 joint_positions = robot_state.get_joint_group_positions("lite6_arm")
                 joint2_position = joint_positions[1]  # Assuming joint2 is at index 1
-                time.sleep(5.0)
 
-                if result and joint2_position <= 1.0:
+                time.sleep(1.0)  # Short pause between attempts for safety
+
+                print('Result', result)
+
+                if result and joint2_position <= 1.0:  # Check if the IK solution is valid and joint2 meets the condition
                     valid_solution = True
                     break  # Valid solution found, exit the loop
                 else:
                     self.get_logger().info(f"Invalid IK solution with joint2 = {joint2_position}. Retrying...")
 
-                attempts += 1
+                self.attempts += 1
 
-            #robot_state.update()
+                #if attempts < 5:
+                #pose_goal.position.x += 0.01  # Increase the z position slightly for each attempt
+                #pose_goal.position.x += np.random.uniform(0.0, 0.02)  # Small perturbation range
+                if pose_goal.position.x < 0.2:
+                    self.x_movement += 0.01*(1 - 1/(self.attempts+1))
+                    print('X movement', self.x_movement)
+                    pose_goal.position.x += self.x_movement  # Small perturbation range
+
+
 
             if not valid_solution:
                 self._logger.error("Failed to find a valid IK solution with joint2 >= 1.0 after multiple attempts.")
@@ -432,11 +490,12 @@ class Movejoints(Node):
             ee_pose = robot_state.get_pose("link_tcp")
 
             pose_goal = Pose()
-            pose_goal.position.x = ee_pose.position.x #+ 0.02
+            pose_goal.position.x = ee_pose.position.x - 1.5*self.x_movement 
             pose_goal.position.y = ee_pose.position.y  
             pose_goal.position.z = ee_pose.position.z - 0.05   ### This can be retrieved by looking at the depth in the pixel that show the board
 
             pose_goal.orientation = ee_pose.orientation
+            self.x_movement = 0.0
 
             original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
             result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=1.0)

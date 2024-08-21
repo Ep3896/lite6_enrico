@@ -66,7 +66,8 @@ class GoToPoseActionServer(Node):
         self.distance_from_object = Float32()
         self.count = 0
         self.stop_execution = False
-        self.bounding_box_center = Point(x=0.0, y=200.0, z=0.0)
+        self.bounding_box_center = None #Point(x=0.0, y=200.0, z=0.0)
+        self.direction = -1  # Initially moving left
 
         self.camera_searching = True
 
@@ -109,6 +110,7 @@ class GoToPoseActionServer(Node):
 
     # This function is called when the camera is searching for the card, it has to move the robot from the initial position
     # to the position where the camera can detect the card
+    """
     def searching_card_callback(self, msg):
         self.camera_searching = msg.data
 
@@ -173,7 +175,80 @@ class GoToPoseActionServer(Node):
                     self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5) # it was 0.5 sleep time
                     updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
                     self.previous_position = updated_camera_position
+    """
+    def searching_card_callback(self, msg):
+        self.camera_searching = msg.data
 
+        if self.stop_execution:
+            self._logger.info("NOT MOVING DUE TO STOP EXECUTION SIGNAL")
+            return
+
+        if self.pick_card:
+            if not self.camera_searching:
+                print("Card is found")
+                return
+            else:
+                self.get_logger().info('Searching for the card...')
+                planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+                robot_state = RobotState(self.lite6.get_robot_model())
+
+                with planning_scene_monitor.read_write() as scene:
+                    robot_state = scene.current_state
+                    ee_pose = robot_state.get_pose("camera_color_optical_frame")
+
+                    pose_goal = Pose()
+
+                    # If no centroid is detected
+                    if self.bounding_box_center is None or self.bounding_box_center.y == 0.0:
+                        # Change direction if limits are reached
+                        if ee_pose.position.x <= 0.1:
+                            self.direction = 1  # Move right
+                            print("Reached lower limit. Changing direction to right.")
+                        elif ee_pose.position.x >= 0.39:
+                            self.direction = -1  # Move left
+                            print("Reached upper limit. Changing direction to left.")
+
+                        # Apply the movement based on the current direction
+                        pose_goal.position.x = ee_pose.position.x + (0.005 * self.direction)
+                    else:
+                        # Adjust pose_goal.position.x based on centroid_y value
+                        centroid_y = self.bounding_box_center.y
+                        if centroid_y < 220: ########à ERA 200
+                            pose_goal.position.x = ee_pose.position.x - 0.005
+                            print("Moving to the left based on centroid:", centroid_y)
+                        else:
+                            pose_goal.position.x = ee_pose.position.x + 0.005
+                            print("Moving to the right based on centroid", centroid_y)
+
+                    # Ensure the position stays within the limits
+                    #pose_goal.position.x = max(0.1, min(pose_goal.position.x, 0.39))
+                    pose_goal.position.y = ee_pose.position.y
+                    pose_goal.position.z = ee_pose.position.z
+
+                    pose_goal.orientation.x = 0.64135
+                    pose_goal.orientation.y = 0.6065
+                    pose_goal.orientation.z = 0.3936
+                    pose_goal.orientation.w = -0.25673
+
+                    original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                    result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+
+                    robot_state.update()
+
+                    if not result:
+                        self._logger.error("IK solution was not found!")
+                        return
+                    else:
+                        plan = True
+                        self.lite6_arm.set_goal_state(robot_state=robot_state)
+                        robot_state.update()
+                        robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                        robot_state.update()
+
+                if plan:
+                    self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+                    updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
+                    self.previous_position = updated_camera_position
 
 
 

@@ -415,7 +415,7 @@ class ControllerNode(Node):
             goal_msg.pose.orientation.w = 0.0 #0.018082
             goal_msg.pose.position.y = -target_position.y
 
-        else:
+        else:           
             goal_msg.pose.orientation.x = 0.64135
             goal_msg.pose.orientation.y = 0.6065
             goal_msg.pose.orientation.z = 0.3936
