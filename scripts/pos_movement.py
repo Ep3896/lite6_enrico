@@ -4,9 +4,9 @@ from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import Float32, Bool, Float32MultiArray, String
 from sensor_msgs.msg import JointState, Image as msg_Image, CameraInfo
 from threading import Event
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseStamped
 from moveit.core.robot_state import RobotState
-from moveit.planning import MoveItPy
+from moveit.planning import MoveItPy, MultiPipelinePlanRequestParameters
 from moveit_configs_utils import MoveItConfigsBuilder
 from ament_index_python.packages import get_package_share_directory
 import time
@@ -21,12 +21,16 @@ import pyrealsense2 as rs2
 if (not hasattr(rs2, 'intrinsics')):
     import pyrealsense2.pyrealsense2 as rs2
 
+from shape_msgs.msg import SolidPrimitive
+from moveit_msgs.msg import CollisionObject
+from moveit.core.planning_scene import PlanningScene
+
 class PosMovement(Node):
 
     def __init__(self):
         super().__init__('pos_movement')
         self.align_positions = []
-        self.obj_to_reach = 'CreditCard'  # Initialize obj_to_reach
+        self.obj_to_reach = 'CreditCard'  # Initialize obj_to_reach ############### BEWARE, TO CHANGE FOR TESTING ONLY POS
 
         moveit_config = (
             MoveItConfigsBuilder(robot_name="UF_ROBOT", package_name="lite6_enrico")
@@ -91,7 +95,7 @@ class PosMovement(Node):
             return
         elif self.obj_to_reach == 'POS':
             self.depth_at_centroid = msg.data
-
+    """
     def move_down_to_logo(self):
         if self.obj_to_reach == 'CreditCard':
             self.get_logger().info("In IDLE state, not doing anything.")
@@ -133,6 +137,375 @@ class PosMovement(Node):
                     robot_state.update()
             if plan:
                 self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+    """
+    """
+    def move_down_to_logo(self):
+        if self.obj_to_reach == 'CreditCard':
+            self.get_logger().info("In IDLE state, not doing anything.")
+            return
+        elif self.obj_to_reach == 'POS':
+            self.get_logger().info("Moving camera down to the logo")
+            planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+            robot_state = RobotState(self.lite6.get_robot_model())
+
+            with planning_scene_monitor.read_write() as scene:
+                robot_state = scene.current_state
+                camera_pose = robot_state.get_pose("camera_color_optical_frame")
+
+                original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+
+                pose_goal = Pose()
+                pose_goal.position.x = camera_pose.position.x - 0.1
+                pose_goal.position.y = camera_pose.position.y - self.difference
+                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid - 0.01
+
+                print('Depth at centroid', self.depth_at_centroid)
+
+                pose_goal.orientation.x = 0.0
+                pose_goal.orientation.y = 0.7
+                pose_goal.orientation.z = 0.0
+                pose_goal.orientation.w = 0.7
+
+                max_attempts = 100
+                attempts = 0
+                valid_solution = False
+
+                while attempts < max_attempts:
+                    # Attempt to solve IK with the current pose_goal
+                    result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=10.0)
+
+
+                    if result:
+                        valid_solution = True
+                        break  # Exit loop on valid IK solution
+                    else:
+                        #self.get_logger().info(f"Invalid IK solution with joint2 = {joint2_position}. Retrying...")
+                        ## Small perturbation to explore nearby solutions
+                        #for i in range(len(joint_positions)):
+                        #    joint_positions[i] += np.random.uniform(-0.01, 0.01)
+                        #robot_state.set_joint_group_positions("lite6_arm", joint_positions)
+                        #robot_state.update()
+                        robot_state.set_to_random_positions()
+                        robot_state.update()
+
+                    attempts += 1
+
+                if not valid_solution:
+                    self._logger.error("Failed to find a valid IK solution after multiple attempts.")
+                    return
+                else:
+                    plan = True
+                    self.lite6_arm.set_goal_state(robot_state=robot_state)
+                    robot_state.update()
+                    robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                    robot_state.update()
+
+            if plan:
+                # Multi-pipeline plan request
+                multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+                    self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+                )
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
+    
+
+    def move_down_to_logo(self):
+        if self.obj_to_reach == 'CreditCard':
+            self.get_logger().info("In IDLE state, not doing anything.")
+            return
+        elif self.obj_to_reach == 'POS':
+            self.get_logger().info("Moving camera down to the logo")
+            planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+            robot_state = RobotState(self.lite6.get_robot_model())
+            
+            with planning_scene_monitor.read_write() as scene:
+                robot_state = scene.current_state
+                camera_pose = robot_state.get_pose("camera_color_optical_frame")
+
+                # Define a collision object (e.g., representing the surface or any obstacle)
+                collision_object = CollisionObject()
+                collision_object.id = "POS object"  # Assign an ID to the object
+
+                # Define the dimensions and pose of the collision object
+                primitive = SolidPrimitive()
+                primitive.type = SolidPrimitive.BOX
+                primitive.dimensions = [0.1, 0.2, 0.2]  # Example dimensions: 50cm x 50cm x 5cm
+
+                object_pose = PoseStamped()
+                object_pose.header.frame_id = "world"
+                object_pose.pose.position.x = camera_pose.position.x
+                object_pose.pose.position.y = camera_pose.position.y
+                object_pose.pose.position.z = camera_pose.position.z - 0.05  # Placing it under the camera
+
+                # Set the orientation (if necessary)
+                object_pose.pose.orientation.x = 0.0
+                object_pose.pose.orientation.y = 0.0
+                object_pose.pose.orientation.z = 0.0
+                object_pose.pose.orientation.w = 1.0
+
+                # Assign the primitive shape and pose to the collision object
+                collision_object.primitives.append(primitive)
+                collision_object.primitive_poses.append(object_pose.pose)
+                collision_object.operation = CollisionObject.ADD
+
+
+                # Add the collision object to the planning scene
+                #planning_scene = PlanningScene(scene)
+                scene.apply_collision_object(collision_object)
+
+                # Define the goal pose for the end effector
+                pose_goal = Pose()
+                pose_goal.position.x = camera_pose.position.x - 0.1
+                pose_goal.position.y = camera_pose.position.y - self.difference
+                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid - 0.01
+
+                print('Depth at centroid', self.depth_at_centroid)
+
+                pose_goal.orientation.x = 0.0
+                pose_goal.orientation.y = 0.7
+                pose_goal.orientation.z = 0.0
+                pose_goal.orientation.w = 0.7
+
+                max_attempts = 100
+                attempts = 0
+                valid_solution = False
+
+                while attempts < max_attempts:
+                    # Attempt to solve IK with the current pose_goal
+                    result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=10.0)
+
+                    if result:
+                        valid_solution = True
+                        break  # Exit loop on valid IK solution
+                    else:
+                        self.get_logger().info("Invalid IK solution. Retrying...")
+                        robot_state.set_to_random_positions()
+                        robot_state.update()
+
+                    attempts += 1
+
+                if not valid_solution:
+                    self._logger.error("Failed to find a valid IK solution after multiple attempts.")
+                    return
+                else:
+                    plan = True
+                    self.lite6_arm.set_goal_state(robot_state=robot_state)
+                    robot_state.update()
+
+                if plan:
+                    # Multi-pipeline plan request with collision avoidance
+                    multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+                        self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+                    )
+                    self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
+    """
+    def plan_down_to_logo(self):
+        if self.obj_to_reach == 'CreditCard':
+            self.get_logger().info("In IDLE state, not doing anything.")
+            return
+        elif self.obj_to_reach == 'POS':
+            self.get_logger().info("Moving camera down to the logo")
+
+            try:
+                planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+                robot_state = RobotState(self.lite6.get_robot_model())
+
+                # Use a context manager to handle locking automatically
+                with planning_scene_monitor.read_write() as scene:
+                    robot_state = scene.current_state
+                    camera_pose = robot_state.get_pose("camera_color_optical_frame")
+                    ee_pose = robot_state.get_pose("link_tcp")
+                    robot_state.update()
+
+                    # Create and add the collision object using the external function
+                    collision_object = self.create_collision_object(
+                        frame_id="world",
+                        object_id="POS",
+                        position=[ee_pose.position.x + 0.03, camera_pose.position.y, 0.0],#camera_pose.position.z - self.depth_at_centroid],
+                        dimensions=[0.1, 0.1, camera_pose.position.z - self.depth_at_centroid]
+                    )
+                    scene.apply_collision_object(collision_object)
+                    scene.current_state.update()
+                    
+                time.sleep(1.0)
+            except Exception as e:
+                self.get_logger().error(f"Exception in plan_down_to_logo: {str(e)}")
+
+
+
+    """
+    def go_down_to_logo(self):
+        planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+        robot_state = RobotState(self.lite6.get_robot_model())
+
+        with planning_scene_monitor.read_write() as scene:
+            robot_state = scene.current_state
+            robot_state.update()
+
+            camera_pose = robot_state.get_pose("camera_color_optical_frame")
+            original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+
+            # Define the goal pose for the end effector
+            pose_goal = Pose()
+            pose_goal.position.x = camera_pose.position.x - 0.1
+            pose_goal.position.y = camera_pose.position.y - self.difference
+            pose_goal.position.z = 0.1 # Adjusted target position
+            pose_goal.orientation.x = 0.0
+            pose_goal.orientation.y = 0.7
+            pose_goal.orientation.z = 0.0
+            pose_goal.orientation.w = 0.7
+
+            max_attempts = 100
+            attempts = 0
+            valid_solution = False
+            robot_collision_status = True
+
+            robot_state = scene.current_state
+            robot_state.update()
+
+            #while robot_collision_status:
+            result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=10.0)
+            robot_state.update()
+            
+            #robot_collision_status = scene.is_state_colliding(
+            #    robot_state=robot_state, joint_model_group_name="lite6_arm", verbose=True
+            #)
+            
+
+            #print(f"\nRobot is in collision: {robot_collision_status}\n")
+            print('attempts', attempts)
+            print('Result', result)
+
+            if result: # and not robot_collision_status:
+                valid_solution = True
+                #break
+            else:
+                time.sleep(0.2)
+                self.get_logger().info("Invalid IK solution. Retrying...")
+                robot_state = scene.current_state
+                robot_state.update()
+
+            attempts += 1
+
+            if not valid_solution:
+                self._logger.error("Failed to find a valid IK solution after multiple attempts.")
+                return
+
+            # Set the start state to the current state before planning
+            self.lite6_arm.set_start_state_to_current_state()
+
+            # Proceed with planning and execution
+            plan = True
+            self.lite6_arm.set_goal_state(robot_state=robot_state)
+            robot_state.update()
+            print("Planning execution")
+
+        if plan:
+            # Multi-pipeline plan request with collision avoidance
+            multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+                self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+            )
+            self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
+
+            """
+
+
+    def go_down_to_logo(self):
+        if self.obj_to_reach == 'CreditCard':
+            self.get_logger().info("In IDLE state, not doing anything.")
+            return
+        elif self.obj_to_reach == 'POS':
+            self.get_logger().info("Moving camera down to the logo")
+            planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+            robot_state = RobotState(self.lite6.get_robot_model())
+
+            with planning_scene_monitor.read_write() as scene:
+                robot_state = scene.current_state
+                camera_pose = robot_state.get_pose("camera_color_optical_frame")
+
+                pose_goal = Pose()
+                pose_goal.position.x = camera_pose.position.x - 0.1
+                pose_goal.position.y = camera_pose.position.y - self.difference
+                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid - 0.01  ### This can be retrieved by looking at the depth in the pixel that show the board
+
+                print('Depth at centroid', self.depth_at_centroid)
+
+                pose_goal.orientation.x = 0.0
+                pose_goal.orientation.y = 0.7
+                pose_goal.orientation.z = 0.0
+                pose_goal.orientation.w = 0.7
+
+                robot_collision_status = True
+
+                while robot_collision_status: # keeps iterating until robot_collision status is False
+
+                    original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                    result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=5.0)
+
+                    robot_state.update()
+
+                    robot_collision_status = scene.is_state_colliding(
+                        robot_state=robot_state, joint_model_group_name="lite6_arm", verbose=True
+                    )
+
+                    print(f"\nRobot is in collision: {robot_collision_status}\n")
+                    time.sleep(1.0)
+                        
+                        #return
+                    if result and not robot_collision_status: # if result is found (True) and robot is not in collision
+                        plan = True
+                        self.lite6_arm.set_goal_state(robot_state=robot_state)
+                        robot_state.update()
+                        robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                        robot_state.update()
+                        break
+                    else:
+                        self._logger.error("IK solution was not found!")
+
+            if plan:
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+
+
+
+
+    def create_collision_object(self, frame_id="world", object_id="table", position=None, dimensions=None):
+        """
+        Creates a collision object for the planning scene.
+
+        :param frame_id: The reference frame for the object (e.g., "world").
+        :param object_id: A unique ID for the collision object.
+        :param position: A list or tuple [x, y, z] for the object's position.
+        :param dimensions: A list or tuple [x, y, z] for the object's dimensions (e.g., [0.5, 0.5, 0.05]).
+        :return: CollisionObject ready to be added to the planning scene.
+        """
+        if position is None:
+            position = [0.1, - 0.1, 0.6]
+        if dimensions is None:
+            dimensions = [0.1, 0.1, 0.05]
+
+        # Define the collision object
+        collision_object = CollisionObject()
+        collision_object.id = object_id
+        collision_object.header.frame_id = frame_id
+
+        # Define the object's shape and dimensions
+        primitive = SolidPrimitive()
+        primitive.type = SolidPrimitive.BOX
+        primitive.dimensions = dimensions
+
+        # Define the pose of the collision object
+        object_pose = Pose()
+        object_pose.position.x = position[0]
+        object_pose.position.y = position[1]
+        object_pose.position.z = position[2]
+        object_pose.orientation.w = 1.0  # Identity quaternion
+
+        # Assign the shape and pose to the collision object
+        collision_object.primitives.append(primitive)
+        collision_object.primitive_poses.append(object_pose)
+        collision_object.operation = CollisionObject.ADD
+
+        return collision_object
+
 
     def move_ee_to_camera_pos(self):
         if self.obj_to_reach == 'CreditCard':
@@ -164,7 +537,7 @@ class PosMovement(Node):
 
                 if not result:
                     self._logger.error("IK solution was not found!")
-                    rclpy.shutdown()
+                    #rclpy.shutdown()
                     return
                 else:
                     plan = True
@@ -302,8 +675,23 @@ class PosMovement(Node):
                 self.pointcloud_pub.publish(Bool(data=True))
                 self.move_ee_to_camera_pos()
                 time.sleep(1.5)
-                self.move_down_to_logo()
+                self.plan_down_to_logo()
+                time.sleep(1.5)
+                #self.move_to_ready_position("Ready")
+                #time.sleep(1.5)
+                self.go_down_to_logo() # The problem lies here!
                 rclpy.shutdown()
+
+    def move_to_ready_position(self, position_name): ####
+        self.get_logger().info("Moving EE to Ready position")
+
+        self.lite6_arm.set_start_state_to_current_state()
+        self.lite6_arm.set_goal_state(configuration_name=position_name)  ####
+        plan_result = self.lite6_arm.plan()
+
+        if plan_result:
+            robot_trajectory = plan_result.trajectory
+            self.lite6.execute(robot_trajectory, controllers=[])
 
     def align_with_pos_bbox(self, frame_center_x, frame_center_y, bbox_center):
         self.get_logger().info("Aligning with POS bbox")
@@ -473,6 +861,7 @@ def main(args=None):
     rclpy.init(args=args)
     pos_movement = PosMovement()
     #pos_movement.move_down_to_logo()
+    #pos_movement.create_collision_object(frame_id=str("world"), object_id=str("POS"))
 
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(pos_movement)

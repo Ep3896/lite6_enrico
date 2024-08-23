@@ -60,7 +60,7 @@ class GoToPoseActionServer(Node):
         self.initial_distance_y_pub = self.create_publisher(Float32, "/control/initial_distance_y", 10)
         self.stop_locked_movement_pub = self.create_publisher(Bool, '/control/stop_locked_movement', 10)
 
-        self.pick_card = True
+        self.pick_card =  True
         self.first_movement = True
         self.initial_distance_y = 0.0
         self.distance_from_object = Float32()
@@ -68,6 +68,7 @@ class GoToPoseActionServer(Node):
         self.stop_execution = False
         self.bounding_box_center = None #Point(x=0.0, y=200.0, z=0.0)
         self.direction = -1  # Initially moving left
+        self.debug_attempt = 0
 
         self.camera_searching = True
 
@@ -183,72 +184,123 @@ class GoToPoseActionServer(Node):
             self._logger.info("NOT MOVING DUE TO STOP EXECUTION SIGNAL")
             return
 
-        if self.pick_card:
-            if not self.camera_searching:
-                print("Card is found")
-                return
-            else:
-                self.get_logger().info('Searching for the card...')
-                planning_scene_monitor = self.lite6.get_planning_scene_monitor()
-                robot_state = RobotState(self.lite6.get_robot_model())
+        #if self.pick_card: # CreditCard object searching
+        if not self.camera_searching:
+            print("Card is found")
+            return
+        else:
+            self.get_logger().info('Searching for the card...')
+            planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+            robot_state = RobotState(self.lite6.get_robot_model())
 
-                with planning_scene_monitor.read_write() as scene:
-                    robot_state = scene.current_state
-                    ee_pose = robot_state.get_pose("camera_color_optical_frame")
+            with planning_scene_monitor.read_write() as scene:
+                robot_state = scene.current_state
+                camera_pose = robot_state.get_pose("camera_color_optical_frame")
 
-                    pose_goal = Pose()
+                pose_goal = Pose()
 
-                    # If no centroid is detected
-                    if self.bounding_box_center is None or self.bounding_box_center.y == 0.0:
+                # If no centroid is detected
+                if self.bounding_box_center is None or self.bounding_box_center.y == 0.0:
+                    if self.pick_card:
                         # Change direction if limits are reached
-                        if ee_pose.position.x <= 0.1:
+                        if camera_pose.position.x <= 0.1:
                             self.direction = 1  # Move right
                             print("Reached lower limit. Changing direction to right.")
-                        elif ee_pose.position.x >= 0.39:
+                        elif camera_pose.position.x >= 0.39:
+                            self.direction = -1  # Move left
+                            print("Reached upper limit. Changing direction to left.")
+                    else:
+                        if camera_pose.position.x  <= 0.15:
+                            self.direction = 1  # Move right
+                            print("Reached lower limit. Changing direction to right.")
+                        elif camera_pose.position.x >= 0.25:
                             self.direction = -1  # Move left
                             print("Reached upper limit. Changing direction to left.")
 
-                        # Apply the movement based on the current direction
-                        pose_goal.position.x = ee_pose.position.x + (0.005 * self.direction)
-                    else:
-                        # Adjust pose_goal.position.x based on centroid_y value
-                        centroid_y = self.bounding_box_center.y
+                    # Apply the movement based on the current direction, both for self.pick_card and not self.pick_card
+                    pose_goal.position.x = camera_pose.position.x + (0.005 * self.direction)
+
+                    if not self.pick_card:
+                        if  camera_pose.position.y >= - 0.1:
+                            self.direction_pos = 1 # Move upwords
+                            print("Moving upwards")
+                        elif  camera_pose.position.y <= -0.3:
+                            self.direction_pos = -1 # Move downwards
+                            print("Moving downwards")
+                        # Apply the movement based on the current direction for not self.pick_card
+                        pose_goal.position.y = camera_pose.position.y + (0.005 * self.direction_pos)
+                    
+                else:
+                    # Adjust pose_goal.position.x based on centroid_y value
+                    centroid_x = self.bounding_box_center.x
+                    centroid_y = self.bounding_box_center.y
+                    if self.pick_card:
                         if centroid_y < 220: ########à ERA 200
-                            pose_goal.position.x = ee_pose.position.x - 0.005
+                            pose_goal.position.x = camera_pose.position.x - 0.005
                             print("Moving to the left based on centroid:", centroid_y)
                         else:
-                            pose_goal.position.x = ee_pose.position.x + 0.005
+                            pose_goal.position.x = camera_pose.position.x + 0.005
                             print("Moving to the right based on centroid", centroid_y)
 
-                    # Ensure the position stays within the limits
-                    #pose_goal.position.x = max(0.1, min(pose_goal.position.x, 0.39))
-                    pose_goal.position.y = ee_pose.position.y
-                    pose_goal.position.z = ee_pose.position.z
+                        pose_goal.position.y = camera_pose.position.y
+                    else:
+                        if centroid_x < 320:
+                            pose_goal.position.x = camera_pose.position.x + 0.005
+                            print("Moving to the left based on centroid:", centroid_y)
+                        else:
+                            pose_goal.position.x = camera_pose.position.x - 0.005
+                            print("Moving to the right based on centroid", centroid_y)
+                        if centroid_y < 180:
+                            pose_goal.position.y = camera_pose.position.y - 0.005
+                            print("Moving upwards based on centroid:", centroid_y)
+                        else:
+                            pose_goal.position.y = camera_pose.position.y + 0.005
+                            print("Moving downwards based on centroid", centroid_y)
+                        
 
+
+                    
+
+                # Ensure the position stays within the limits
+                #pose_goal.position.x = max(0.1, min(pose_goal.position.x, 0.39))
+                """
+                if self.debug_attempt < 3:
+                    pose_goal.position.x = ee_pose.position.x 
+                    pose_goal.position.y = ee_pose.position.y - 0.04
+                    self.debug_attempt += 1
+                else:
+                    pose_goal.position.y = ee_pose.position.y
+                """
+                #pose_goal.position.y = camera_pose.position.y
+                pose_goal.position.z = camera_pose.position.z
+
+                if self.pick_card:
                     pose_goal.orientation.x = 0.64135
                     pose_goal.orientation.y = 0.6065
                     pose_goal.orientation.z = 0.3936
                     pose_goal.orientation.w = -0.25673
+                else:
+                    pose_goal.orientation = camera_pose.orientation
 
-                    original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
-                    result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+                original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
 
+                robot_state.update()
+
+                if not result:
+                    self._logger.error("IK solution was not found!")
+                    return
+                else:
+                    plan = True
+                    self.lite6_arm.set_goal_state(robot_state=robot_state)
+                    robot_state.update()
+                    robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
                     robot_state.update()
 
-                    if not result:
-                        self._logger.error("IK solution was not found!")
-                        return
-                    else:
-                        plan = True
-                        self.lite6_arm.set_goal_state(robot_state=robot_state)
-                        robot_state.update()
-                        robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
-                        robot_state.update()
-
-                if plan:
-                    self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
-                    updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
-                    self.previous_position = updated_camera_position
+            if plan:
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+                updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
+                self.previous_position = updated_camera_position
 
 
 
@@ -424,8 +476,11 @@ class GoToPoseActionServer(Node):
                     movz = 0.2  #################### FOR THE POS OBJECT, this has to be changed, I think it would be good to read the depth from the camera sensor.
                 else:
                     movz = max(movz, 0.15)
-                    movy = movy - 0.1 #0.12 was good # this 0.1 has been done beacuse the camera has to be a bit distant from the object , otherwise it will not detect it
-
+                    #########################à MODIFY HERE
+                    if check_init_pose.position.y < 0.0:   
+                        movy = movy - 0.13 - abs(check_init_pose.position.y) #0.12 was good # this 0.1 has been done beacuse the camera has to be a bit distant from the object , otherwise it will not detect it
+                    else:
+                        movy = movy - 0.13 
             else:                   # Aligning the robot with the object
 
                 if self.pick_card:  # For CreditCard

@@ -154,7 +154,7 @@ class ControllerNode(Node):
             self.searching_card_pub.publish(Bool(data=False))
     """ 
     def detections_callback(self, msg: DetectionArray):
-        if self.pick_card:
+        if self.pick_card: # Credit Card reaching
             card_detected = False
             for detection in msg.detections:
                 if detection.class_name == 'CreditCard':  # Change based on the object to pick
@@ -165,7 +165,8 @@ class ControllerNode(Node):
                 self.searching_card_pub.publish(Bool(data=True))
             else:
                 self.searching_card_pub.publish(Bool(data=False))
-        else:
+                print("Credit Card detected")
+        else: # POS reaching
             pos_detected = False
             for detection in msg.detections:
                 if detection.class_name == 'POS':
@@ -173,6 +174,7 @@ class ControllerNode(Node):
                     self.searching_card_pub.publish(Bool(data=False))
                     self.process_detection(detection)
             if not pos_detected:
+                self.searching_card_pub.publish(Bool(data=True))
                 self.get_logger().info('POS not detected.')
 
         """
