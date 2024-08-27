@@ -499,7 +499,7 @@ class Movejoints(Node):
             pose_goal = Pose()
             #if pose_goal.position.x < 0.2 and pose_goal.position.x != 0.0:
             if self.line_is_far == True:
-                pose_goal.position.x = ee_pose.position.x + 0.04 #np.clip(0.01* (1/pose_goal.position.x), 0.0, 0.05) #- 1.5*self.x_movement 
+                pose_goal.position.x = ee_pose.position.x + 0.02 #np.clip(0.01* (1/pose_goal.position.x), 0.0, 0.05) #- 1.5*self.x_movement 
                 print('LINE IS FAR', pose_goal.position.x)
             else:
                 pose_goal.position.x = ee_pose.position.x

@@ -98,7 +98,7 @@ while True:
         print(f"Red cross drawn at the endpoint with maximum y value: {max_y_point}")  # Debug print
 
         # Publish True to /control/line_is_far if max y < 260, else publish False
-        if max_y_point[1] < 260: # a bit more that 240 but it is to be safe that the robot grasp the card 
+        if max_y_point[1] < 285: # a bit more that 240 but it is to be safe that the robot grasp the card 
             node.publish_line_is_far(True)
         else:
             node.publish_line_is_far(False)

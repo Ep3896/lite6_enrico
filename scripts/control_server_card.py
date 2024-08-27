@@ -69,6 +69,15 @@ class GoToPoseActionServer(Node):
         self.bounding_box_center = None #Point(x=0.0, y=200.0, z=0.0)
         self.direction = -1  # Initially moving left
         self.debug_attempt = 0
+        self.counter = 0
+        self.previous_centroid = None
+        self.x_direction = -1
+        self.y_direction = -1
+        self.x_direction_counter = 4
+        self.y_direction_counter = 0
+        self.direction_pos = -1
+        self.counter=0
+        
 
         self.camera_searching = True
 
@@ -201,7 +210,9 @@ class GoToPoseActionServer(Node):
 
                 # If no centroid is detected
                 if self.bounding_box_center is None or self.bounding_box_center.y == 0.0:
-                    if self.pick_card:
+
+                    # Workspace and direction definition of CreditCard and POS object
+                    if self.pick_card: # CreditCard
                         # Change direction if limits are reached
                         if camera_pose.position.x <= 0.12:
                             self.direction = 1  # Move right
@@ -209,59 +220,97 @@ class GoToPoseActionServer(Node):
                         elif camera_pose.position.x >= 0.36:
                             self.direction = -1  # Move left
                             print("Reached upper limit. Changing direction to left.")
-                    else:
+                        pose_goal.position.y = camera_pose.position.y
+                     
+                    else:              # POS object
                         if camera_pose.position.x  <= 0.15:
                             self.direction = 1  # Move right
                             print("Reached lower limit. Changing direction to right.")
                         elif camera_pose.position.x >= 0.25:
                             self.direction = -1  # Move left
                             print("Reached upper limit. Changing direction to left.")
-
-                    # Apply the movement based on the current direction, both for self.pick_card and not self.pick_card
-                    pose_goal.position.x = camera_pose.position.x + (0.005 * self.direction)
-
-                    if not self.pick_card:
-                        if  camera_pose.position.y >= - 0.1:
-                            self.direction_pos = 1 # Move upwords
+                        elif camera_pose.position.y >= -0.1:
+                            self.direction_pos = 1
                             print("Moving upwards")
-                        elif  camera_pose.position.y <= -0.3:
-                            self.direction_pos = -1 # Move downwards
+                        elif camera_pose.position.y <= -0.3:
+                            self.direction_pos = -1
                             print("Moving downwards")
                         # Apply the movement based on the current direction for not self.pick_card
                         pose_goal.position.y = camera_pose.position.y + (0.005 * self.direction_pos)
-                    else:
-                        pose_goal.position.y = camera_pose.position.y
                     
-                else:
-                    # Adjust pose_goal.position.x based on centroid_y value
-                    centroid_x = self.bounding_box_center.x
-                    centroid_y = self.bounding_box_center.y
+                    # Apply the movement based on the current direction, both for self.pick_card and not self.pick_card
+                    pose_goal.position.x = camera_pose.position.x + (0.005 * self.direction)
+                    
+                else:  # If centroid is detected
                     if self.pick_card:
-                        if centroid_y < 220: ########à ERA 200
-                            pose_goal.position.x = camera_pose.position.x - 0.005
-                            print("Moving to the left based on centroid:", centroid_y)
-                        else:
-                            pose_goal.position.x = camera_pose.position.x + 0.005
-                            print("Moving to the right based on centroid", centroid_y)
+                        centroid_x = round(self.bounding_box_center.x,1)
+                        centroid_y = round(self.bounding_box_center.y,1)
 
-                        pose_goal.position.y = camera_pose.position.y
-                    else:
-                        if centroid_x < 320:
-                            pose_goal.position.x = camera_pose.position.x + 0.005
-                            print("Moving to the left based on centroid:", centroid_y)
-                        else:
-                            pose_goal.position.x = camera_pose.position.x - 0.005
-                            print("Moving to the right based on centroid", centroid_y)
-                        if centroid_y < 180:
-                            pose_goal.position.y = camera_pose.position.y - 0.005
-                            print("Moving upwards based on centroid:", centroid_y)
-                        else:
-                            pose_goal.position.y = camera_pose.position.y + 0.005
-                            print("Moving downwards based on centroid", centroid_y)
-                        
+                        new_centroid = (centroid_x, centroid_y)
 
+                        if self.previous_centroid and (centroid_x, centroid_y) == self.previous_centroid:  # Check if the centroid is the same as the previous one
+                            print("CENTROID NOT CHANGED")
+
+                            # Adjust the counter based on the current direction
+                            self.x_direction_counter += self.x_direction  # Increment or decrement the counter
+
+                            # Check if the counter has reached the boundaries (6 or 1)
+                            if self.x_direction_counter > 8 + round(self.counter,0):
+                                self.x_direction_counter = 7 + round(self.counter,0)  # Start decrementing by setting counter to 5
+                                self.x_direction = -1  # Change direction to negative
+                                self.counter += 2 # Increment to avoid to stay in a state where the card is not seen anymore
+
+                            elif self.x_direction_counter < 1 - round(self.counter,0):
+                                self.x_direction_counter = 2 - round(self.counter,0)   # Start incrementing by setting counter to 2
+                                self.x_direction = 1  # Change direction to positive
+                                #rclpy.shutdown()
+                                self.counter += 4 # Increment to avoid to stay in a state where the card is not seen anymore
+
+                            print(" Count is ", self.counter)
+                            print(f"X direction counter is {self.x_direction_counter} and Direction is {self.x_direction}")
+
+                            pose_goal.position.x = np.clip(camera_pose.position.x + self.x_direction * 0.005, 0.1, 0.37)
+
+                            pose_goal.position.y = camera_pose.position.y
+
+                        # Direction control for x-axis
+                        else: # if new centroid is detected, at the beginnign it will go here 
+                            self.x_direction_counter = 0
+                            self.counter = 0
+                            if self.pick_card:
+                                if centroid_y < 220: ########à ERA 200
+                                    pose_goal.position.x = camera_pose.position.x - 0.005
+                                    print("Moving to the left based on centroid:", centroid_y)
+                                    self.x_direction = -1
+                                else:
+                                    pose_goal.position.x = camera_pose.position.x + 0.005
+                                    self.x_direction = +1
+                                    print("Moving to the right based on centroid", centroid_y)
+
+                                pose_goal.position.y = camera_pose.position.y
+                            else:
+                                if centroid_x < 320:
+                                    pose_goal.position.x = camera_pose.position.x + 0.005
+                                    print("Moving to the left based on centroid:", centroid_y)
+                                else:
+                                    pose_goal.position.x = camera_pose.position.x - 0.005
+                                    print("Moving to the right based on centroid", centroid_y)
+                                if centroid_y < 180:
+                                    pose_goal.position.y = camera_pose.position.y - 0.005
+                                    print("Moving upwards based on centroid:", centroid_y)
+                                else:
+                                    pose_goal.position.y = camera_pose.position.y + 0.005
+                                    print("Moving downwards based on centroid", centroid_y)
+                        # Update the previous centroid
+                        print("New centroid is {0} and Old Centroid is {1}", new_centroid, self.previous_centroid)
+                        self.previous_centroid = (centroid_x, centroid_y)
+
+                    else: # For POS object
+                        print("POS object")
+                
 
                     
+ 
 
                 # Ensure the position stays within the limits
                 #pose_goal.position.x = max(0.1, min(pose_goal.position.x, 0.39))
