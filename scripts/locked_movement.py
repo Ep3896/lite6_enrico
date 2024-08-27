@@ -47,13 +47,14 @@ class Movejoints(Node):
 
         self.get_logger().info("StoringConfigurationsArea node has been started")
 
-        self.create_subscription(Float32, '/control/bbox_area', self.bbox_area_callback, 10)
+        self.create_subscription(Float32, '/control/bbox_area', self.bbox_area_callback, 30)
         self.create_subscription(JointState, '/control/joint_states', self.joint_states_callback, 10)
         self.create_subscription(Float32, '/control/initial_distance_y', self.initial_distance_y_callback, 10)
         self.create_subscription(Float32, '/control/depth_adjustment', self.depth_adjustment_callback, 100)
         self.create_subscription(Float32MultiArray, '/control/bbox_center', self.bbox_center_callback, 10)
-        self.create_subscription(Bool, '/control/alignment_status', self.alignment_status_callback, 10)
+        self.create_subscription(Bool, '/control/alignment_status', self.alignment_status_callback, 30)
         self.create_subscription(Bool, '/control/stop_locked_movement', self.stop_locked_movement_callback, 10)
+        self.create_subscription(Bool, '/control/line_is_far', self.line_is_far_callback, 30)
 
         self.stop_execution_pub = self.create_publisher(Bool, '/control/stop_execution', 30)
         self.pointcloud_pub = self.create_publisher(Bool, '/control/start_pointcloud', 10)
@@ -81,6 +82,8 @@ class Movejoints(Node):
         self.attempts = 1
         self.x_movement = 0.0
 
+        self.line_is_far = None
+
         # Timer to print joint positions periodically
         #self.timer = self.create_timer(0.5, self.print_joint_positions) #it was 1.0
 
@@ -89,6 +92,10 @@ class Movejoints(Node):
 
         # Timer for alignment with card edge
         self.alignment_timer = self.create_timer(2.0, self.align_with_card_edge_callback) # it was 2.0 
+
+
+    def line_is_far_callback(self, msg):
+        self.line_is_far = msg.data
 
     def depth_adjustment_callback(self, msg):
         self.previous_depth_adjustment = self.depth_adjustment
@@ -249,7 +256,7 @@ class Movejoints(Node):
 
                 pose_goal.orientation = ee_pose.orientation
             """
-            pose_goal.position.x = camera_pose.position.x + 0.03
+            pose_goal.position.x = camera_pose.position.x #+ 0.03
             pose_goal.position.y = camera_pose.position.y
             pose_goal.position.z = ee_pose.position.z
 
@@ -419,10 +426,10 @@ class Movejoints(Node):
                 #if attempts < 5:
                 #pose_goal.position.x += 0.01  # Increase the z position slightly for each attempt
                 #pose_goal.position.x += np.random.uniform(0.0, 0.02)  # Small perturbation range
-                if pose_goal.position.x < 0.2:
-                    self.x_movement += 0.01*(1 - 1/(self.attempts+1))
-                    print('X movement', self.x_movement)
-                    pose_goal.position.x += self.x_movement  # Small perturbation range
+                #if pose_goal.position.x < 0.2:
+                #    self.x_movement += 0.01*(1 - 1/(self.attempts+1))
+                #    print('X movement', self.x_movement)
+                #    pose_goal.position.x += self.x_movement  # Small perturbation range
 
 
 
@@ -486,11 +493,16 @@ class Movejoints(Node):
         robot_state = RobotState(self.lite6.get_robot_model())
 
         with planning_scene_monitor.read_write() as scene:
-            robot_state = scene.current_state
+            robot_state = scene.current_state 
             ee_pose = robot_state.get_pose("link_tcp")
 
             pose_goal = Pose()
-            pose_goal.position.x = ee_pose.position.x - 1.5*self.x_movement 
+            #if pose_goal.position.x < 0.2 and pose_goal.position.x != 0.0:
+            if self.line_is_far == True:
+                pose_goal.position.x = ee_pose.position.x + 0.04 #np.clip(0.01* (1/pose_goal.position.x), 0.0, 0.05) #- 1.5*self.x_movement 
+                print('LINE IS FAR', pose_goal.position.x)
+            else:
+                pose_goal.position.x = ee_pose.position.x
             pose_goal.position.y = ee_pose.position.y  
             pose_goal.position.z = ee_pose.position.z - 0.05   ### This can be retrieved by looking at the depth in the pixel that show the board
 

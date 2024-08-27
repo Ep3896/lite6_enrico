@@ -61,7 +61,7 @@ class CameraManager(Node):
         self.stop_current_process()
         self.get_logger().info('Starting rs_pointcloud')
         self.process = Popen(['ros2', 'launch', 'realsense2_camera', 'rs_pointcloud_launch.py', 
-                          'depth_module.profile:=640x360x30', 'depth_module.exposure:=6000'])
+                          'depth_module.profile:=640x360x30', 'depth_module.exposure:=6000', 'align_depth.enable:=true'])
         self.current_mode = 'pointcloud'
 
     def stop_rs_pointcloud(self):

@@ -203,10 +203,10 @@ class GoToPoseActionServer(Node):
                 if self.bounding_box_center is None or self.bounding_box_center.y == 0.0:
                     if self.pick_card:
                         # Change direction if limits are reached
-                        if camera_pose.position.x <= 0.1:
+                        if camera_pose.position.x <= 0.12:
                             self.direction = 1  # Move right
                             print("Reached lower limit. Changing direction to right.")
-                        elif camera_pose.position.x >= 0.39:
+                        elif camera_pose.position.x >= 0.36:
                             self.direction = -1  # Move left
                             print("Reached upper limit. Changing direction to left.")
                     else:
@@ -229,6 +229,8 @@ class GoToPoseActionServer(Node):
                             print("Moving downwards")
                         # Apply the movement based on the current direction for not self.pick_card
                         pose_goal.position.y = camera_pose.position.y + (0.005 * self.direction_pos)
+                    else:
+                        pose_goal.position.y = camera_pose.position.y
                     
                 else:
                     # Adjust pose_goal.position.x based on centroid_y value
@@ -478,6 +480,7 @@ class GoToPoseActionServer(Node):
                     movz = max(movz, 0.15)
                     #########################à MODIFY HERE
                     if check_init_pose.position.y < 0.0:   
+                        ############# UNCOMMENT "abs(check_init_pose.position.y)" IF THE CAMERA IS ON THE RIGHT SIDE OF THE OBJECT
                         movy = movy - 0.13 - abs(check_init_pose.position.y) #0.12 was good # this 0.1 has been done beacuse the camera has to be a bit distant from the object , otherwise it will not detect it
                     else:
                         movy = movy - 0.13 

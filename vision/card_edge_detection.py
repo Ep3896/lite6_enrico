@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray, String,Bool
+from std_msgs.msg import Float32MultiArray, Bool
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 # Initialize video capture for the webcam (channel 4)
@@ -11,23 +11,6 @@ cap = cv2.VideoCapture(4)
 if not cap.isOpened():
     print("Error: Could not open webcam.")
     exit()
-
-def get_line_length(x1, y1, x2, y2):
-    return np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-
-def does_line_cross_center(x1, y1, x2, y2, center_x, center_y):
-    # Check if the line segment crosses the center of the frame
-    if x1 == x2:  # Vertical line
-        return center_x == x1 and min(y1, y2) <= center_y <= max(y1, y2)
-    else:
-        # Calculate line equation y = mx + c
-        m = (y2 - y1) / (x2 - x1)
-        c = y1 - m * x1
-        # Check if the center point satisfies the line equation
-        y_at_center_x = m * center_x + c
-        x_at_center_y = (center_y - c) / m
-        return (min(y1, y2) <= center_y <= max(y1, y2) and abs(x_at_center_y - center_x) < 1) or \
-               (min(x1, x2) <= center_x <= max(x1, x2) and abs(y_at_center_x - center_y) < 1)
 
 class CardEdgeDetection(Node):
     def __init__(self):
@@ -41,8 +24,7 @@ class CardEdgeDetection(Node):
 
         self.publisher_ = self.create_publisher(Float32MultiArray, '/control/bbox_center', 10)
         self.status_publisher_ = self.create_publisher(Bool, '/control/alignment_status', 10)
-
-
+        self.line_is_far_publisher_ = self.create_publisher(Bool, '/control/line_is_far', 10)
 
     def publish_bbox_center(self, x, y):
         msg = Float32MultiArray()
@@ -53,6 +35,11 @@ class CardEdgeDetection(Node):
         msg = Bool()
         msg.data = status
         self.status_publisher_.publish(msg)
+
+    def publish_line_is_far(self, status):
+        msg = Bool()
+        msg.data = status
+        self.line_is_far_publisher_.publish(msg)
 
 rclpy.init()
 node = CardEdgeDetection()
@@ -68,19 +55,15 @@ while True:
     # Get the center of the frame
     frame_height, frame_width = frame.shape[:2]
     center_x, center_y = frame_width // 2, frame_height // 2
-    distance_threshold = 100  # Distance threshold in pixels
 
     # Convert into gray scale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # Image processing (smoothing)
-    # Averaging
     blur = cv2.blur(gray, (3, 3))
 
     # Apply logarithmic transform
     img_log = (np.log(blur + 1) / (np.log(1 + np.max(blur)))) * 255
-
-    # Specify the data type
     img_log = np.array(img_log, dtype=np.uint8)
 
     # Image smoothing: bilateral filter
@@ -89,53 +72,41 @@ while True:
     # Canny Edge Detection with lower thresholds
     edges = cv2.Canny(bilateral, 30, 100)
 
-    # Hough Line Transform with lower threshold for more sensitivity
-    lines = cv2.HoughLines(edges, 1, np.pi / 180, 100)
-    
-    longest_line = None
-    max_length = 0
-
-    if lines is not None:
-        for rho, theta in lines[:, 0]:
-            # Filter for almost vertical lines
-            if theta < np.pi / 18 or theta > 17 * np.pi / 18:
-                a = np.cos(theta)
-                b = np.sin(theta)
-                x0 = a * rho
-                y0 = b * rho
-                x1 = int(x0 + 1000 * (-b))
-                y1 = int(y0 + 1000 * (a))
-                x2 = int(x0 - 1000 * (-b))
-                y2 = int(y0 - 1000 * (a))
-                length = get_line_length(x1, y1, x2, y2)
-                if length > max_length :
-                    longest_line = (x1, y1, x2, y2)
-                    max_length = length
-
-    # Draw the bounding box or cross on the detected line near the center
+    # Initialize the edges_with_bounding_box to avoid NameError
     edges_with_bounding_box = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)  # Convert edges to BGR for drawing
 
-    # Draw a cross at the center of the frame
-    cross_size = 10
-    cv2.line(edges_with_bounding_box, (center_x - cross_size, center_y), (center_x + cross_size, center_y), (0, 255, 0), 2)
-    cv2.line(edges_with_bounding_box, (center_x, center_y - cross_size), (center_x, center_y + cross_size), (0, 255, 0), 2)
+    # Find coordinates of white pixels in the edge-detected image
+    white_pixels = np.column_stack(np.where(edges > 0))
 
-    if longest_line is not None:
-        x1, y1, x2, y2 = longest_line
-        mid_x = (x1 + x2) // 2
-        mid_y = (y1 + y2) // 2
-        box_size = 10
-        cv2.rectangle(edges_with_bounding_box, (mid_x - box_size, mid_y - box_size), 
-                      (mid_x + box_size, mid_y + box_size), (0, 0, 255), 2)
-        if does_line_cross_center(x1, y1, x2, y2, center_x, center_y):
-            print("OK")
-            node.publish_alignment_status(True)
+    if white_pixels.size > 0:
+        # Identify the endpoint with the maximum y value
+        max_y_index = np.argmax(white_pixels[:, 0])
+        max_y_point = (white_pixels[max_y_index, 1], white_pixels[max_y_index, 0])  # (x, y)
+
+        # Draw a cross at the center of the frame
+        cross_size = 10
+        cv2.line(edges_with_bounding_box, (center_x - cross_size, center_y), (center_x + cross_size, center_y), (0, 255, 0), 2)
+        cv2.line(edges_with_bounding_box, (center_x, center_y - cross_size), (center_x, center_y + cross_size), (0, 255, 0), 2)
+
+        # Draw a smaller red cross at the endpoint with the maximum y value
+        cross_size_red = 8
+        cv2.line(edges_with_bounding_box, (max_y_point[0] - cross_size_red, max_y_point[1]), 
+                 (max_y_point[0] + cross_size_red, max_y_point[1]), (0, 0, 255), 2)
+        cv2.line(edges_with_bounding_box, (max_y_point[0], max_y_point[1] - cross_size_red), 
+                 (max_y_point[0], max_y_point[1] + cross_size_red), (0, 0, 255), 2)
+
+        print(f"Red cross drawn at the endpoint with maximum y value: {max_y_point}")  # Debug print
+
+        # Publish True to /control/line_is_far if max y < 260, else publish False
+        if max_y_point[1] < 260: # a bit more that 240 but it is to be safe that the robot grasp the card 
+            node.publish_line_is_far(True)
         else:
-            node.publish_alignment_status(False)
-        if abs(mid_x - center_x) <= box_size and abs(mid_y - center_y) <= box_size:
-            print("DONE")
-        # Publish the center coordinates of the bounding box
-        node.publish_bbox_center(mid_x, mid_y)
+            node.publish_line_is_far(False)
+
+        # Calculate and publish the center of the detected line
+        node.publish_bbox_center(max_y_point[0], max_y_point[1])
+    else:
+        print("No white pixels found.")
 
     # Display the resulting frames
     cv2.imshow('Original', frame)

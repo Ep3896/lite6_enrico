@@ -56,7 +56,7 @@ class PosMovement(Node):
         self.create_subscription(Bool, '/control/alignment_status', self.alignment_status_callback, 10)
         self.create_subscription(Bool, '/control/stop_pos_movement', self.stop_pos_movement_callback, 10)
         self.create_subscription(Bool, '/control/start_moving_along_y', self.move_along_y_axis_callback, 10)
-        self.create_subscription(Float32, '/control/depth_at_centroid', self.depth_at_centroid_callback, 30)
+        self.create_subscription(Float32, '/control/depth_at_centroid', self.depth_at_centroid_callback, 100)
         self.create_subscription(String, '/control/obj_to_reach', self.obj_to_reach_callback, 10)
 
         self.stop_execution_pub = self.create_publisher(Bool, '/control/stop_execution', 30)
@@ -320,7 +320,7 @@ class PosMovement(Node):
                     collision_object = self.create_collision_object(
                         frame_id="world",
                         object_id="POS",
-                        position=[ee_pose.position.x + 0.03, camera_pose.position.y, 0.0],#camera_pose.position.z - self.depth_at_centroid],
+                        position=[ee_pose.position.x + 0.05, camera_pose.position.y, 0.0],#camera_pose.position.z - self.depth_at_centroid],
                         dimensions=[0.1, 0.1, camera_pose.position.z - self.depth_at_centroid]
                     )
                     scene.apply_collision_object(collision_object)
@@ -425,9 +425,13 @@ class PosMovement(Node):
                 pose_goal = Pose()
                 pose_goal.position.x = camera_pose.position.x - 0.1
                 pose_goal.position.y = camera_pose.position.y - self.difference
-                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid - 0.01  ### This can be retrieved by looking at the depth in the pixel that show the board
+                pose_goal.position.z = max(camera_pose.position.z - self.depth_at_centroid - 0.01, 0.13)  ### This can be retrieved by looking at the depth in the pixel that show the board
 
                 print('Depth at centroid', self.depth_at_centroid)
+                print('Target position z', pose_goal.position.z)
+                
+                if (camera_pose.position.z - self.depth_at_centroid - 0.01) <= 0.13:
+                    print(' BEWARE! Target position z is too low, setting to 0.1 and before it was', camera_pose.position.z - self.depth_at_centroid - 0.01)
 
                 pose_goal.orientation.x = 0.0
                 pose_goal.orientation.y = 0.7
@@ -435,10 +439,18 @@ class PosMovement(Node):
                 pose_goal.orientation.w = 0.7
 
                 robot_collision_status = True
+                attempts = 0
 
                 while robot_collision_status: # keeps iterating until robot_collision status is False
 
                     original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+
+                    robot_state.set_to_random_positions()
+                    robot_state.update()
+
+                    pose_goal.position.z += attempts * 0.01
+                    pose_goal.position.x += attempts * 0.01
+
                     result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=5.0)
 
                     robot_state.update()
@@ -460,9 +472,14 @@ class PosMovement(Node):
                         break
                     else:
                         self._logger.error("IK solution was not found!")
+                    
+                    attempts += 1
 
             if plan:
-                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+                multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+                    self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+                )
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
 
 
 
@@ -546,7 +563,10 @@ class PosMovement(Node):
                     robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
                     robot_state.update()
             if plan:
-                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+                multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+                    self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+                )
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
 
     def move_along_y_axis_callback(self, msg):
         if self.obj_to_reach == 'CreditCard':
@@ -680,6 +700,8 @@ class PosMovement(Node):
                 #self.move_to_ready_position("Ready")
                 #time.sleep(1.5)
                 self.go_down_to_logo() # The problem lies here!
+                time.sleep(1.5)
+                self.move_to_ready_position("Ready")
                 rclpy.shutdown()
 
     def move_to_ready_position(self, position_name): ####

@@ -24,7 +24,7 @@ class ImageListener(Node):
         self.pix_grade = None
 
 
-        self.center_depth_pub = self.create_publisher(Float32, '/control/depth_at_centroid', 30)
+        self.center_depth_pub = self.create_publisher(Float32, '/control/depth_at_centroid', 100)
     def imageDepthCallback(self, data):
         try:
             cv_image = self.bridge.imgmsg_to_cv2(data, data.encoding)

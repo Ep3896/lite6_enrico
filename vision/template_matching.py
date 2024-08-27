@@ -10,7 +10,7 @@ class TemplateMatchingNode(Node):
         super().__init__('template_matching_node')
         self.template_path = '/home/lite6/Desktop/Piacenti/2.Vision/3.Training/9.Training_10_07/Shape_Detector/pos_real_logo1.png'
         self.webcam_channel = 4
-        self.threshold = 0.5
+        self.threshold = 0.7
         self.scales = np.linspace(0.5, 2.0, 30)
         
         self.depth_pub = self.create_publisher(Float32, '/control/depth_at_centroid', 10)
