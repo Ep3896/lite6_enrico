@@ -73,7 +73,7 @@ class GoToPoseActionServer(Node):
         self.previous_centroid = None
         self.x_direction = -1
         self.y_direction = -1
-        self.x_direction_counter = 4
+        self.x_direction_counter = 7
         self.y_direction_counter = 0
         self.direction_pos = -1
         self.counter=0
@@ -195,7 +195,10 @@ class GoToPoseActionServer(Node):
 
         #if self.pick_card: # CreditCard object searching
         if not self.camera_searching:
-            print("Card is found")
+            if self.pick_card:
+                print("Card is found")
+            else:
+                print("POS is found")
             return
         else:
             self.get_logger().info('Searching for the card...')
@@ -208,7 +211,7 @@ class GoToPoseActionServer(Node):
 
                 pose_goal = Pose()
 
-                # If no centroid is detected
+                # If centroid is never detected
                 if self.bounding_box_center is None or self.bounding_box_center.y == 0.0:
 
                     # Workspace and direction definition of CreditCard and POS object
@@ -241,13 +244,14 @@ class GoToPoseActionServer(Node):
                     # Apply the movement based on the current direction, both for self.pick_card and not self.pick_card
                     pose_goal.position.x = camera_pose.position.x + (0.005 * self.direction)
                     
-                else:  # If centroid is detected
-                    if self.pick_card:
-                        centroid_x = round(self.bounding_box_center.x,1)
-                        centroid_y = round(self.bounding_box_center.y,1)
+                else:  # If centroid is detected at least once
+                    centroid_x = round(self.bounding_box_center.x,1)
+                    centroid_y = round(self.bounding_box_center.y,1)
 
-                        new_centroid = (centroid_x, centroid_y)
+                    new_centroid = (centroid_x, centroid_y) 
 
+                    if self.pick_card: # CreditCard object
+                        # Is the new centroid the same as the previous one? If so, it means that no new centroid is detected
                         if self.previous_centroid and (centroid_x, centroid_y) == self.previous_centroid:  # Check if the centroid is the same as the previous one
                             print("CENTROID NOT CHANGED")
 
@@ -258,13 +262,13 @@ class GoToPoseActionServer(Node):
                             if self.x_direction_counter > 8 + round(self.counter,0):
                                 self.x_direction_counter = 7 + round(self.counter,0)  # Start decrementing by setting counter to 5
                                 self.x_direction = -1  # Change direction to negative
-                                self.counter += 2 # Increment to avoid to stay in a state where the card is not seen anymore
+                                self.counter += 5 # Increment to avoid to stay in a state where the card is not seen anymore
 
                             elif self.x_direction_counter < 1 - round(self.counter,0):
                                 self.x_direction_counter = 2 - round(self.counter,0)   # Start incrementing by setting counter to 2
                                 self.x_direction = 1  # Change direction to positive
                                 #rclpy.shutdown()
-                                self.counter += 4 # Increment to avoid to stay in a state where the card is not seen anymore
+                                self.counter += 1 # Increment to avoid to stay in a state where the card is not seen anymore
 
                             print(" Count is ", self.counter)
                             print(f"X direction counter is {self.x_direction_counter} and Direction is {self.x_direction}")
@@ -273,41 +277,43 @@ class GoToPoseActionServer(Node):
 
                             pose_goal.position.y = camera_pose.position.y
 
-                        # Direction control for x-axis
+                        # Is the new centroid different from the previous one? If so, it means that a new centroid is detected
+                        # And if a new centroid is detected, it means that I have o do basically nothing because
+                        # the action client will send a new goal to the robot
+                        # and it will take care of the movement
                         else: # if new centroid is detected, at the beginnign it will go here 
-                            self.x_direction_counter = 0
+                            #self.x_direction_counter = 0
                             self.counter = 0
-                            if self.pick_card:
-                                if centroid_y < 220: ########à ERA 200
-                                    pose_goal.position.x = camera_pose.position.x - 0.005
-                                    print("Moving to the left based on centroid:", centroid_y)
-                                    self.x_direction = -1
-                                else:
-                                    pose_goal.position.x = camera_pose.position.x + 0.005
-                                    self.x_direction = +1
-                                    print("Moving to the right based on centroid", centroid_y)
-
-                                pose_goal.position.y = camera_pose.position.y
+                            if centroid_y < 220: ########à ERA 200
+                                pose_goal.position.x = camera_pose.position.x - 0.003
+                                print("Moving to the left based on centroid:", centroid_y)
+                                self.x_direction = -1
                             else:
-                                if centroid_x < 320:
-                                    pose_goal.position.x = camera_pose.position.x + 0.005
-                                    print("Moving to the left based on centroid:", centroid_y)
-                                else:
-                                    pose_goal.position.x = camera_pose.position.x - 0.005
-                                    print("Moving to the right based on centroid", centroid_y)
-                                if centroid_y < 180:
-                                    pose_goal.position.y = camera_pose.position.y - 0.005
-                                    print("Moving upwards based on centroid:", centroid_y)
-                                else:
-                                    pose_goal.position.y = camera_pose.position.y + 0.005
-                                    print("Moving downwards based on centroid", centroid_y)
-                        # Update the previous centroid
-                        print("New centroid is {0} and Old Centroid is {1}", new_centroid, self.previous_centroid)
-                        self.previous_centroid = (centroid_x, centroid_y)
+                                pose_goal.position.x = camera_pose.position.x + 0.003
+                                self.x_direction = +1
+                                print("Moving to the right based on centroid", centroid_y)
+
+                            pose_goal.position.y = camera_pose.position.y
 
                     else: # For POS object
                         print("POS object")
-                
+                        if centroid_x < 320:
+                            pose_goal.position.x = camera_pose.position.x + 0.003
+                            print("Moving to the left based on centroid:", centroid_y)
+                        else:
+                            pose_goal.position.x = camera_pose.position.x - 0.003
+                            print("Moving to the right based on centroid", centroid_y)
+                        if centroid_y < 180:
+                            pose_goal.position.y = camera_pose.position.y - 0.003
+                            print("Moving upwards based on centroid:", centroid_y)
+                        else:
+                            pose_goal.position.y = camera_pose.position.y + 0.003
+                            print("Moving downwards based on centroid", centroid_y)
+                    
+                    # Update the previous centroid
+                    print("New centroid is {0} and Old Centroid is {1}", new_centroid, self.previous_centroid)
+                    self.previous_centroid = (centroid_x, centroid_y)
+            
 
                     
  
@@ -335,6 +341,9 @@ class GoToPoseActionServer(Node):
 
                 original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
                 result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+                
+                if not self.pick_card:
+                    print("Pose goal is: ", pose_goal)
 
                 robot_state.update()
 

@@ -225,6 +225,10 @@ class Movejoints(Node):
         self.object_to_reach_pub.publish(object_to_reach_msg)
         # I also need to start again the pointcloud to detect the POS
         self.pointcloud_pub.publish(Bool(data=True))
+        time.sleep(1.5)
+        rclpy.shutdown()
+
+        #time.sleep(20)
 
 
     def move_ee_to_camera_pos(self):
@@ -499,7 +503,7 @@ class Movejoints(Node):
             pose_goal = Pose()
             #if pose_goal.position.x < 0.2 and pose_goal.position.x != 0.0:
             if self.line_is_far == True:
-                pose_goal.position.x = ee_pose.position.x + 0.02 #np.clip(0.01* (1/pose_goal.position.x), 0.0, 0.05) #- 1.5*self.x_movement 
+                pose_goal.position.x = ee_pose.position.x + 0.03 #np.clip(0.01* (1/pose_goal.position.x), 0.0, 0.05) #- 1.5*self.x_movement 
                 print('LINE IS FAR', pose_goal.position.x)
             else:
                 pose_goal.position.x = ee_pose.position.x
