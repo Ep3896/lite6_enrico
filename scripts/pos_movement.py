@@ -76,6 +76,7 @@ class PosMovement(Node):
         self.alignment_within_threshold_event = Event()  # Event to wait for alignment within threshold
         self.start_move_along_y = None
         self.difference = None
+        self.payment_depth = None
 
         self.first_alignment = True
         self.previous_error_x = 0
@@ -156,8 +157,11 @@ class PosMovement(Node):
                 pose_goal = Pose()
                 pose_goal.position.x = camera_pose.position.x - 0.12
                 pose_goal.position.y = camera_pose.position.y - self.difference
-                pose_goal.position.z = max(camera_pose.position.z - self.depth_at_centroid + 0.02, 0.13)  ### This can be retrieved by looking at the depth in the pixel that show the board
+                pose_goal.position.z = max(camera_pose.position.z - self.depth_at_centroid + (camera_pose.position.z - self.depth_at_centroid)/2, 0.13)  ### This can be retrieved by looking at the depth in the pixel that show the board
                                                                                                           # It is a little bit higher, before z had - 0.01
+                                                                                                          # [camera_pose.position.z - self.depth_at_centroid]/2
+                self.payment_depth = (camera_pose.position.z - self.depth_at_centroid)/2
+
                 print('Depth at centroid', self.depth_at_centroid)
                 print('Target position z', pose_goal.position.z)
                 
@@ -279,7 +283,50 @@ class PosMovement(Node):
                 pose_goal = Pose()
                 pose_goal.position.x = ee_pose.position.x
                 pose_goal.position.y = ee_pose.position.y
-                pose_goal.position.z = ee_pose.position.z - 0.015
+                pose_goal.position.z = ee_pose.position.z - self.payment_depth - 0.01 # offset to be sure that the card is on the POS
+
+                pose_goal.orientation = ee_pose.orientation
+
+                original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+                result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=5.0)
+
+                robot_state.update()
+
+                if not result:
+                    self._logger.error("IK solution was not found!")
+                    #rclpy.shutdown()
+                    return
+                else:
+                    plan = True
+                    self.lite6_arm.set_goal_state(robot_state=robot_state)
+                    robot_state.update()
+                    robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                    robot_state.update()
+            if plan:
+                multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+                    self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+                )
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
+
+
+    def pay_moving_up_card(self):
+        if self.obj_to_reach == 'CreditCard':
+            self.get_logger().info("In IDLE state, not doing anything.")
+            return
+        elif self.obj_to_reach == 'POS':
+            self.get_logger().info("Moving Card Up! Payment done")
+            planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+            robot_state = RobotState(self.lite6.get_robot_model())
+
+            with planning_scene_monitor.read_write() as scene:
+                robot_state = scene.current_state
+                ee_pose = robot_state.get_pose("link_tcp")
+                #camera_pose = robot_state.get_pose("camera_color_optical_frame")
+
+                pose_goal = Pose()
+                pose_goal.position.x = ee_pose.position.x
+                pose_goal.position.y = ee_pose.position.y
+                pose_goal.position.z = ee_pose.position.z + self.payment_depth + 0.01 # offset to be sure that the card is on the POS
 
                 pose_goal.orientation = ee_pose.orientation
 
@@ -477,10 +524,11 @@ class PosMovement(Node):
             elif self.phase == 2:
                 # Move along -y axis until y alignment
                 print('Inside Phase 2')
-                self.align_y_axis(frame_center_y, bbox_center)
+                self.align_y_axis(frame_center_y=200, bbox_center=bbox_center)
             elif self.phase == 3:
                 # Align x axis with template matching bbox
                 self.align_x_axis(frame_center_x, bbox_center_template)
+                #self.align_y_axis(frame_center_y=240, bbox_center_template=bbox_center_template) # ADDED THIS, I DON'T KNOW IF IT WILL WORK
                 self.pointcloud_pub.publish(Bool(data=True))
                 self.move_ee_to_camera_pos()
                 time.sleep(1.5)
@@ -491,7 +539,9 @@ class PosMovement(Node):
                 self.go_down_to_logo() # The problem lies here!
                 time.sleep(1.5)
                 self.pay_moving_down_card()
-                time.sleep(2.0)
+                time.sleep(4.0)
+                self.pay_moving_up_card()
+                time.sleep(1.5)
                 self.move_to_ready_position("Ready")
                 time.sleep(1.5)
                 self.move_to_configuration("CameraSearching")
@@ -533,7 +583,7 @@ class PosMovement(Node):
             bbox_center_y = self.bbox_center_template[1]
             error_y = frame_center_y - bbox_center_y
 
-            if abs(error_y) > 3:
+            if abs(error_y) > 5:
                 self.adjust_robot_position_xy(0, error_y)
                 self.get_logger().info(f"Error in Y axis: {error_y}, Adjusting position for alignment")
             else:
