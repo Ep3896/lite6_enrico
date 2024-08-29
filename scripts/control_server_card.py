@@ -242,7 +242,7 @@ class GoToPoseActionServer(Node):
                         pose_goal.position.y = camera_pose.position.y + (0.005 * self.direction_pos)
                     
                     # Apply the movement based on the current direction, both for self.pick_card and not self.pick_card
-                    pose_goal.position.x = camera_pose.position.x + (0.005 * self.direction)
+                    pose_goal.position.x = camera_pose.position.x + (0.01 * self.direction) ######## IT WAS 0.005
                     
                 else:  # If centroid is detected at least once
                     centroid_x = round(self.bounding_box_center.x,1)
@@ -340,7 +340,7 @@ class GoToPoseActionServer(Node):
                     pose_goal.orientation = camera_pose.orientation
 
                 original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
-                result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0)
+                result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=1.0) # it was 1.0
                 
                 if not self.pick_card:
                     print("Pose goal is: ", pose_goal)
@@ -358,7 +358,7 @@ class GoToPoseActionServer(Node):
                     robot_state.update()
 
             if plan:
-                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5)
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5) 
                 updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
                 self.previous_position = updated_camera_position
 
@@ -535,7 +535,10 @@ class GoToPoseActionServer(Node):
                 if not self.pick_card:
                     movz = 0.2  #################### FOR THE POS OBJECT, this has to be changed, I think it would be good to read the depth from the camera sensor.
                 else:
-                    movz = max(movz, 0.15)
+                    if movy >= 0.2: # When cards are far from the camera, the z must be increased otherwise the camera will not detect the card
+                        movz = max(movz, 0.20)
+                    else:
+                        movz = max(movz, 0.15)             
                     #########################à MODIFY HERE
                     if check_init_pose.position.y < 0.0:   
                         ############# UNCOMMENT "abs(check_init_pose.position.y)" IF THE CAMERA IS ON THE RIGHT SIDE OF THE OBJECT
@@ -655,7 +658,7 @@ class GoToPoseActionServer(Node):
 
         if plan:
             self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, constraints=constraints)
-            time.sleep(1.0)
+            #time.sleep(1.0) ################ REMOVED
             updated_camera_position = robot_state.get_pose("camera_color_optical_frame").position
             self.previous_position = updated_camera_position
             return updated_camera_position

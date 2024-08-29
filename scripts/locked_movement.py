@@ -181,7 +181,7 @@ class Movejoints(Node):
             self.get_logger().info(f"Planned trajectory: {robot_trajectory}")
             self.lite6.execute(robot_trajectory, controllers=[])
             self.get_logger().info("Robot moved to the selected configuration")
-            time.sleep(1.5)
+            time.sleep(0.5)
             self.get_logger().info("Moving above card")
             #self.move_above_card_translation()
             #time.sleep(1.5)
@@ -204,13 +204,13 @@ class Movejoints(Node):
         #self.move_ee_to_camera_pos()
         robot = robot_control.RobotControl()
         robot.open_gripper()
-        time.sleep(1.5)
+        time.sleep(0.5)
         self.move_down_to_card()
-        time.sleep(1.5)
+        time.sleep(0.5)
         robot.close_gripper()
-        time.sleep(1.5)
+        time.sleep(0.5)
         self.store_card_position()
-        time.sleep(1.5)
+        time.sleep(0.5)
         self.move_to_ready_position(position_name="PosSearching")
         #time.sleep(1.5)
         #self.mv_to_card_position()
@@ -403,7 +403,7 @@ class Movejoints(Node):
                 
                 print('Attempt', self.attempts)
 
-                if self.attempts < 10:
+                if self.attempts < 3:
                     robot_state = scene.current_state
                 else:
                     robot_state.set_to_random_positions()
@@ -507,8 +507,11 @@ class Movejoints(Node):
                 print('LINE IS FAR', pose_goal.position.x)
             else:
                 pose_goal.position.x = ee_pose.position.x
-            pose_goal.position.y = ee_pose.position.y  
-            pose_goal.position.z = ee_pose.position.z - 0.05   ### This can be retrieved by looking at the depth in the pixel that show the board
+            pose_goal.position.y = ee_pose.position.y
+            if ee_pose.position.z <= 0.16:
+                pose_goal.position.z = ee_pose.position.z - 0.05   ### This can be retrieved by looking at the depth in the pixel that show the board
+            else:
+                pose_goal.position.z = ee_pose.position.z - 0.08
 
             pose_goal.orientation = ee_pose.orientation
             self.x_movement = 0.0
@@ -557,7 +560,7 @@ class Movejoints(Node):
                     # Now I have to cancel the timer
                     self.alignment_timer.cancel()
                     self.move_ee_to_camera_pos()
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     self.continue_process_after_alignment()
             else:
                 self.get_logger().info("Bounding box center not available")

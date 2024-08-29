@@ -24,6 +24,8 @@ if (not hasattr(rs2, 'intrinsics')):
 from shape_msgs.msg import SolidPrimitive
 from moveit_msgs.msg import CollisionObject
 from moveit.core.planning_scene import PlanningScene
+from moveit.core.collision_detection import CollisionRequest, CollisionResult
+
 
 class PosMovement(Node):
 
@@ -77,6 +79,7 @@ class PosMovement(Node):
         self.start_move_along_y = None
         self.difference = None
         self.payment_depth = None
+        self.x_position_pos = None
 
         self.first_alignment = True
         self.previous_error_x = 0
@@ -84,10 +87,11 @@ class PosMovement(Node):
         self.phase = 0  # Starting with the first phase
         self.depth_at_centroid = None
         self.failed_planning = False
+        self.failed = False
 
         self.pointcloud_pub.publish(Bool(data=True))
 
-        self.alignment_bbox_timer = self.create_timer(2.0, self.align_with_bbox_logo_callback)
+        self.alignment_bbox_timer = self.create_timer(1.5, self.align_with_bbox_logo_callback) # it was 2.0
 
     def bounding_box_center_callback(self, msg):
         if self.obj_to_reach == 'CreditCard':
@@ -133,10 +137,11 @@ class PosMovement(Node):
                         position=[ee_pose.position.x, camera_pose.position.y, 0.0],#camera_pose.position.z - self.depth_at_centroid],   ee_pose.position.x had + 0.05
                         dimensions=[0.1, 0.1, camera_pose.position.z - self.depth_at_centroid]
                     )
+
                     scene.apply_collision_object(collision_object)
                     scene.current_state.update()
                     
-                time.sleep(1.0)
+                time.sleep(0.5)
             except Exception as e:
                 self.get_logger().error(f"Exception in plan_down_to_logo: {str(e)}")
 
@@ -150,23 +155,25 @@ class PosMovement(Node):
             planning_scene_monitor = self.lite6.get_planning_scene_monitor()
             robot_state = RobotState(self.lite6.get_robot_model())
 
-            with planning_scene_monitor.read_write() as scene:
+            with planning_scene_monitor.read_only() as scene: ############ BEFORE IT WAS READ AND WRITE
                 robot_state = scene.current_state
                 camera_pose = robot_state.get_pose("camera_color_optical_frame")
 
-                pose_goal = Pose()
-                pose_goal.position.x = camera_pose.position.x - 0.12
-                pose_goal.position.y = camera_pose.position.y - self.difference
-                pose_goal.position.z = max(camera_pose.position.z - self.depth_at_centroid + (camera_pose.position.z - self.depth_at_centroid)/2, 0.13)  ### This can be retrieved by looking at the depth in the pixel that show the board
-                                                                                                          # It is a little bit higher, before z had - 0.01
-                                                                                                          # [camera_pose.position.z - self.depth_at_centroid]/2
-                self.payment_depth = (camera_pose.position.z - self.depth_at_centroid)/2
+                # Calculate the target depth
+                self.payment_depth = 2 * (camera_pose.position.z - self.depth_at_centroid) / 3
 
-                print('Depth at centroid', self.depth_at_centroid)
-                print('Target position z', pose_goal.position.z)
-                
-                if (camera_pose.position.z - self.depth_at_centroid - 0.01) <= 0.13:
-                    print(' BEWARE! Target position z is too low, setting to 0.1 and before it was', camera_pose.position.z - self.depth_at_centroid - 0.01)
+                pose_goal = Pose()
+                pose_goal.position.x = camera_pose.position.x - 0.11
+                pose_goal.position.y = camera_pose.position.y - self.difference
+                #pose_goal.position.z = max(camera_pose.position.z - self.depth_at_centroid + self.payment_depth, 0.15)  # Increased minimum z to 0.15
+                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid - 0.01
+
+                # Log the calculated positions
+                self.get_logger().info(f"Depth at centroid: {self.depth_at_centroid}")
+                self.get_logger().info(f"Target position z: {pose_goal.position.z}")
+
+                if (camera_pose.position.z - self.depth_at_centroid - 0.01) <= 0.15:
+                    self.get_logger().warn("Target position z is too low, adjusting to safe value.")
 
                 pose_goal.orientation.x = 0.0
                 pose_goal.orientation.y = 0.7
@@ -176,8 +183,7 @@ class PosMovement(Node):
                 robot_collision_status = True
                 attempts = 0
 
-                while robot_collision_status: # keeps iterating until robot_collision status is False
-
+                while robot_collision_status and attempts < 20:  # Limit the number of attempts to avoid infinite loops
                     original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
 
                     robot_state.set_to_random_positions()
@@ -185,18 +191,32 @@ class PosMovement(Node):
 
                     result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=5.0)
 
-                    robot_state.update()
+                    robot_state.update(True)
 
                     robot_collision_status = scene.is_state_colliding(
                         robot_state=robot_state, joint_model_group_name="lite6_arm", verbose=True
                     )
 
-                    print(f"\nRobot is in collision: {robot_collision_status}\n")
-                    time.sleep(1.0)
-                        
-                        #return
-                    if result and not robot_collision_status: # if result is found (True) and robot is not in collision
+                    self.get_logger().info(f"Robot is in collision: {robot_collision_status}")
+
+
+                    collision_request = CollisionRequest()
+                    collision_result = CollisionResult()
+                    collision_request.contacts = True
+                    #self.lite6.get_planning_component("lite6_arm").get_planning_scene().check_self_collision(collision_request, collision_result)
+                    planning_scene = PlanningScene(self.lite6.get_robot_model())
+                    planning_scene.check_self_collision(collision_request, collision_result, robot_state)
+                    if collision_result.collision:
+                        self.get_logger().info("Self-collision detected")
+                        # Handle the collision scenario, e.g., stopping the robot
+                    else:
+                        self.get_logger().info("No self-collision detected")
+
+
+
+                    if result and not robot_collision_status and not collision_result.collision:  # If a valid and collision-free IK solution is found
                         plan = True
+
                         self.lite6_arm.set_goal_state(robot_state=robot_state)
                         robot_state.update()
                         robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
@@ -204,25 +224,30 @@ class PosMovement(Node):
                         break
                     else:
                         self._logger.error("IK solution was not found!")
-                        pose_goal.position.x -= 0.1
+                        # Adjust the goal slightly to attempt a new solution
+                        print('Pose goal position x BEFORE:', pose_goal.position.x)
+                        pose_goal.position.x -= 0.01 # ha fatto effetto a quanto pare!
+                        #pose_goal.position.z += 0.005  # Adjust the z position slightly upwards
+                        #print('Pose goal position x AFTER:', pose_goal.position.x)
+                        self.failed = True
+                        robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                        robot_state.update(True)
+                        attempts += 1
+                        #break  ############################## ADDED THIS BREAK -------------->> PUT IT BACK TO MAKE IT WORK
+                        
 
-                    #pose_goal.position.z += attempts * 0.01
-                    #pose_goal.position.x -= 0.05
+                    time.sleep(0.5)
 
-                    attempts += 1
+                if not result or robot_collision_status:
+                    self.get_logger().error("Unable to find a collision-free IK solution after several attempts.")
+                    return
 
             if plan:
                 multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
                     self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
                 )
                 self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
-                #time.sleep(1.0)
-                #while self.failed_planning is True:
-                #    time.sleep(1.0)
-                #    self.get_logger().info("Failed planning, retrying")
-                #    #pose_goal.position.z += 0.01
-                #    pose_goal.position.x -= 0.02
-                #    self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
+
 
 
 
@@ -271,24 +296,31 @@ class PosMovement(Node):
             self.get_logger().info("In IDLE state, not doing anything.")
             return
         elif self.obj_to_reach == 'POS':
-            self.get_logger().info("Moving EE to camera position")
+            print('                    ')
+            self.get_logger().info("PAYMENT MOVEMENT FAILED")
+            print('                    ')
+            #time.sleep(5.0)
             planning_scene_monitor = self.lite6.get_planning_scene_monitor()
             robot_state = RobotState(self.lite6.get_robot_model())
 
             with planning_scene_monitor.read_write() as scene:
                 robot_state = scene.current_state
                 ee_pose = robot_state.get_pose("link_tcp")
-                #camera_pose = robot_state.get_pose("camera_color_optical_frame")
+                camera_pose = robot_state.get_pose("camera_color_optical_frame")
 
                 pose_goal = Pose()
-                pose_goal.position.x = ee_pose.position.x
-                pose_goal.position.y = ee_pose.position.y
-                pose_goal.position.z = ee_pose.position.z - self.payment_depth - 0.01 # offset to be sure that the card is on the POS
+                pose_goal.position.x = camera_pose.position.x - 0.05 - 0.05 # the first 0.05 is half the distance of the POS
+                pose_goal.position.y = camera_pose.position.y - self.difference
+                #pose_goal.position.z = ee_pose.position.z - self.payment_depth - 0.015 # offset to be sure that the card is on the POS
+                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid
 
-                pose_goal.orientation = ee_pose.orientation
+                pose_goal.orientation.x = 0.0
+                pose_goal.orientation.y = 0.7
+                pose_goal.orientation.z = 0.0
+                pose_goal.orientation.w = 0.7
 
                 original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
-                result = robot_state.set_from_ik("lite6_arm", pose_goal, "link_tcp", timeout=5.0)
+                result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=5.0)
 
                 robot_state.update()
 
@@ -496,7 +528,7 @@ class PosMovement(Node):
             self.get_logger().info(f"Planned trajectory: {robot_trajectory}")
             self.lite6.execute(robot_trajectory, controllers=[])
             self.get_logger().info("Robot moved to the selected configuration")
-            time.sleep(1.5)
+            time.sleep(0.5)
             self.phase = 1
             #self.template_matching_pub.publish(Bool(data=True))
 
@@ -527,24 +559,26 @@ class PosMovement(Node):
                 self.align_y_axis(frame_center_y=200, bbox_center=bbox_center)
             elif self.phase == 3:
                 # Align x axis with template matching bbox
-                self.align_x_axis(frame_center_x, bbox_center_template)
+                self.align_x_axis(frame_center_x=260, bbox_center=bbox_center_template)
                 #self.align_y_axis(frame_center_y=240, bbox_center_template=bbox_center_template) # ADDED THIS, I DON'T KNOW IF IT WILL WORK
                 self.pointcloud_pub.publish(Bool(data=True))
                 self.move_ee_to_camera_pos()
-                time.sleep(1.5)
+                time.sleep(0.5)
                 self.plan_down_to_logo()
-                time.sleep(1.5)
+                time.sleep(0.5)
                 #self.move_to_ready_position("Ready")
                 #time.sleep(1.5)
                 self.go_down_to_logo() # The problem lies here!
-                time.sleep(1.5)
-                self.pay_moving_down_card()
-                time.sleep(4.0)
+                time.sleep(0.5)
+                if self.failed:
+                    self.get_logger().info("Failed to find a collision-free IK solution, stopping and shutting down")
+                    self.pay_moving_down_card()
+                time.sleep(0.5)
                 self.pay_moving_up_card()
-                time.sleep(1.5)
+                time.sleep(0.5)
                 self.move_to_ready_position("Ready")
-                time.sleep(1.5)
-                self.move_to_configuration("CameraSearching")
+                #time.sleep(1.5)
+                #self.move_to_configuration("CameraSearching")
                 time.sleep(1.5)
                 rclpy.shutdown()
 
@@ -597,6 +631,7 @@ class PosMovement(Node):
         self.get_logger().info("Aligning x axis with template matching bbox")
         bbox_center_x = bbox_center[0]
         error_x = frame_center_x - bbox_center_x
+        time.sleep(5.0)
 
         if abs(error_x) > 10:
             self.adjust_robot_position_xy(error_x, 0)
