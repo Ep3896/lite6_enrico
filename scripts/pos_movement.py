@@ -25,6 +25,8 @@ from shape_msgs.msg import SolidPrimitive
 from moveit_msgs.msg import CollisionObject
 from moveit.core.planning_scene import PlanningScene
 from moveit.core.collision_detection import CollisionRequest, CollisionResult
+from moveit_msgs.msg import Constraints, JointConstraint
+
 
 
 class PosMovement(Node):
@@ -80,6 +82,7 @@ class PosMovement(Node):
         self.difference = None
         self.payment_depth = None
         self.x_position_pos = None
+        self.start_getting_areas = False
 
         self.first_alignment = True
         self.previous_error_x = 0
@@ -155,18 +158,18 @@ class PosMovement(Node):
             planning_scene_monitor = self.lite6.get_planning_scene_monitor()
             robot_state = RobotState(self.lite6.get_robot_model())
 
-            with planning_scene_monitor.read_only() as scene: ############ BEFORE IT WAS READ AND WRITE
+            with planning_scene_monitor.read_write() as scene: ############ BEFORE IT WAS READ AND WRITE
                 robot_state = scene.current_state
                 camera_pose = robot_state.get_pose("camera_color_optical_frame")
 
                 # Calculate the target depth
-                self.payment_depth = 2 * (camera_pose.position.z - self.depth_at_centroid) / 3
+                self.payment_depth = 3 * (camera_pose.position.z - self.depth_at_centroid) / 4
 
                 pose_goal = Pose()
                 pose_goal.position.x = camera_pose.position.x - 0.11
                 pose_goal.position.y = camera_pose.position.y - self.difference
-                #pose_goal.position.z = max(camera_pose.position.z - self.depth_at_centroid + self.payment_depth, 0.15)  # Increased minimum z to 0.15
-                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid - 0.01
+                pose_goal.position.z = max(camera_pose.position.z - self.depth_at_centroid + self.payment_depth, 0.15)  # Increased minimum z to 0.15
+                #pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid #- 0.01
 
                 # Log the calculated positions
                 self.get_logger().info(f"Depth at centroid: {self.depth_at_centroid}")
@@ -248,7 +251,140 @@ class PosMovement(Node):
                 )
                 self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, multi_plan_parameters=multi_pipeline_plan_request_params)
 
+    def final_go_down_to_logo(self):
+        if self.obj_to_reach == 'CreditCard':
+            self.get_logger().info("In IDLE state, not doing anything.")
+            return
+        elif self.obj_to_reach == 'POS':
+            self.get_logger().info("Moving camera down to the logo")
+            planning_scene_monitor = self.lite6.get_planning_scene_monitor()
+            robot_state = RobotState(self.lite6.get_robot_model())
 
+            with planning_scene_monitor.read_write() as scene: ############ BEFORE IT WAS READONLY
+                robot_state = scene.current_state
+                camera_pose = robot_state.get_pose("camera_color_optical_frame")
+
+                pose_goal = Pose()
+                pose_goal.position.x = camera_pose.position.x #- np.random.uniform(-0.01, 0.01)
+                pose_goal.position.y = camera_pose.position.y - 0.01
+                pose_goal.position.z = camera_pose.position.z - self.payment_depth #- 0.005 # Increased minimum z to 0.15
+                #pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid #- 0.01
+
+                pose_goal.orientation = camera_pose.orientation
+
+                #pose_goal.orientation.x = 0.0
+                #pose_goal.orientation.y = 0.7
+                #pose_goal.orientation.z = 0.0
+                #pose_goal.orientation.w = 0.7
+
+                robot_collision_status = True
+                attempts = 0
+
+                while robot_collision_status and attempts < 20:  # Limit the number of attempts to avoid infinite loops
+                    original_joint_positions = robot_state.get_joint_group_positions("lite6_arm")
+
+                    robot_state = scene.current_state
+                    robot_state.update()
+
+                    result = robot_state.set_from_ik("lite6_arm", pose_goal, "camera_color_optical_frame", timeout=15.0)
+
+                    robot_state.update()
+
+                    robot_collision_status = scene.is_state_colliding(
+                        robot_state=robot_state, joint_model_group_name="lite6_arm", verbose=True
+                    )
+
+                    self.get_logger().info(f"Robot is in collision: {robot_collision_status}")
+
+
+                    collision_request = CollisionRequest()
+                    collision_result = CollisionResult()
+                    collision_request.contacts = True
+                    #self.lite6.get_planning_component("lite6_arm").get_planning_scene().check_self_collision(collision_request, collision_result)
+                    planning_scene = PlanningScene(self.lite6.get_robot_model())
+                    planning_scene.check_self_collision(collision_request, collision_result, robot_state)
+                    if collision_result.collision:
+                        self.get_logger().info("Self-collision detected")
+                        # Handle the collision scenario, e.g., stopping the robot
+                    else:
+                        self.get_logger().info("No self-collision detected")
+
+
+
+                    if result and not robot_collision_status and not collision_result.collision:  # If a valid and collision-free IK solution is found
+                        plan = True
+
+                        self.lite6_arm.set_goal_state(robot_state=robot_state)
+                        robot_state.update()
+                        robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                        robot_state.update()
+                        break
+                    else:
+                        self._logger.error("IK solution was not found!")
+                        # Adjust the goal slightly to attempt a new solution
+                        #print('Pose goal position x BEFORE:', pose_goal.position.x)
+                        pose_goal.position.x -= 0.01 # ha fatto effetto a quanto pare!
+                        #pose_goal.position.z += 0.005  # Adjust the z position slightly upwards
+                        #print('Pose goal position x AFTER:', pose_goal.position.x)
+                        #self.failed = True
+                        #robot_state.set_joint_group_positions("lite6_arm", original_joint_positions)
+                        #robot_state.update(True)
+                        attempts += 1
+                        #break  ############################## ADDED THIS BREAK -------------->> PUT IT BACK TO MAKE IT WORK
+                        
+
+                    time.sleep(0.5)
+
+                if not result or robot_collision_status:
+                    self.get_logger().error("Unable to find a collision-free IK solution after several attempts.")
+                    return
+
+            if plan:
+
+                constraints = Constraints()
+                constraints.name = "joints_constraints"
+
+
+                joint_3_constraint = JointConstraint()
+                joint_3_constraint.joint_name = "joint3"
+                joint_3_constraint.position = original_joint_positions[2]
+                joint_3_constraint.tolerance_above = 2.5   # Upper limit = Desired value + Tolerance above, this is the one that prevents the collision between link 3 aand robot base
+                joint_3_constraint.tolerance_below = 2.5   # Lower limit = Desired value − Tolerance below
+                joint_3_constraint.weight = 1.0
+                constraints.joint_constraints.append(joint_3_constraint)
+
+                joint_4_constraint = JointConstraint()
+                joint_4_constraint.joint_name = "joint4"
+                joint_4_constraint.position = original_joint_positions[3]
+                joint_4_constraint.tolerance_above = 1.5   # Upper limit = Desired value + Tolerance above, this is the one that prevents the collision between link 3 aand robot base
+                joint_4_constraint.tolerance_below = 1.5   # Lower limit = Desired value − Tolerance below
+                joint_4_constraint.weight = 1.0
+                constraints.joint_constraints.append(joint_4_constraint)
+
+
+                joint_5_constraint = JointConstraint()
+                joint_5_constraint.joint_name = "joint5"
+                joint_5_constraint.position = original_joint_positions[4]
+                joint_5_constraint.tolerance_above = 1.5   # Upper limit = Desired value + Tolerance above, this is the one that prevents the collision between link 3 aand robot base
+                joint_5_constraint.tolerance_below = 1.5   # Lower limit = Desired value − Tolerance below
+                joint_5_constraint.weight = 1.0
+                constraints.joint_constraints.append(joint_5_constraint)
+
+
+                joint_6_constraint = JointConstraint()
+                joint_6_constraint.joint_name = "joint6"
+                joint_6_constraint.position = original_joint_positions[5]
+                joint_6_constraint.tolerance_above = 1.5   # Upper limit = Desired value + Tolerance above, this is the one that prevents the collision between link 3 aand robot base
+                joint_6_constraint.tolerance_below = 1.5   # Lower limit = Desired value − Tolerance below
+                joint_6_constraint.weight = 1.0
+                constraints.joint_constraints.append(joint_6_constraint)
+
+
+
+                multi_pipeline_plan_request_params = MultiPipelinePlanRequestParameters(
+                    self.lite6, ["ompl_rrtc", "pilz_lin", "chomp_b", "ompl_rrt_star", "stomp_b"]
+                )
+                self.plan_and_execute(self.lite6, self.lite6_arm, self._logger, sleep_time=0.5, constraints=constraints, multi_plan_parameters=multi_pipeline_plan_request_params)
 
 
 
@@ -309,10 +445,10 @@ class PosMovement(Node):
                 camera_pose = robot_state.get_pose("camera_color_optical_frame")
 
                 pose_goal = Pose()
-                pose_goal.position.x = camera_pose.position.x - 0.05 - 0.05 # the first 0.05 is half the distance of the POS
-                pose_goal.position.y = camera_pose.position.y - self.difference
+                pose_goal.position.x = camera_pose.position.x  # the first 0.05 is half the distance of the POS
+                pose_goal.position.y = camera_pose.position.y - 0.02
                 #pose_goal.position.z = ee_pose.position.z - self.payment_depth - 0.015 # offset to be sure that the card is on the POS
-                pose_goal.position.z = camera_pose.position.z - self.depth_at_centroid
+                pose_goal.position.z = camera_pose.position.z #- 0.05
 
                 pose_goal.orientation.x = 0.0
                 pose_goal.orientation.y = 0.7
@@ -489,7 +625,7 @@ class PosMovement(Node):
         if self.obj_to_reach == 'CreditCard':
             return
 
-        if self.current_joint_states:
+        if self.current_joint_states and self.start_getting_areas:
             joint_positions = list(self.current_joint_states.position)
             bbox_area = msg.data
             self.align_positions.append((joint_positions, bbox_area))
@@ -538,6 +674,8 @@ class PosMovement(Node):
         print('Phase:', self.phase)
         if self.obj_to_reach == 'CreditCard':
             return
+        
+        self.start_getting_areas = True
 
         with self.bbox_center_lock:
             bbox_center = self.bbox_center
@@ -570,16 +708,23 @@ class PosMovement(Node):
                 #time.sleep(1.5)
                 self.go_down_to_logo() # The problem lies here!
                 time.sleep(0.5)
-                if self.failed:
-                    self.get_logger().info("Failed to find a collision-free IK solution, stopping and shutting down")
-                    self.pay_moving_down_card()
+                #if self.failed:
+                #    self.get_logger().info("Failed to find a collision-free IK solution, stopping and shutting down")
+                #    self.pay_moving_down_card()
+                self.final_go_down_to_logo()
+                #while self.failed_planning:
+                #    self.get_logger().info("Failed to find a collision-free IK solution")
+                    #self.pay_moving_down_card()
+                    #time.sleep(0.5)
+                    #self.final_go_down_to_logo()
                 time.sleep(0.5)
                 self.pay_moving_up_card()
-                time.sleep(0.5)
-                self.move_to_ready_position("Ready")
-                #time.sleep(1.5)
-                #self.move_to_configuration("CameraSearching")
                 time.sleep(1.5)
+                #self.move_to_ready_position("Ready")
+                #time.sleep(0.5)
+                print(" MOVE TO CAMERASEATCHING POSITION")
+                #self.move_to_ready_position("CameraSearching")
+                #time.sleep(1.5)
                 rclpy.shutdown()
 
     def move_to_ready_position(self, position_name): ####
@@ -617,7 +762,7 @@ class PosMovement(Node):
             bbox_center_y = self.bbox_center_template[1]
             error_y = frame_center_y - bbox_center_y
 
-            if abs(error_y) > 5:
+            if abs(error_y) > 15:   # it was 5
                 self.adjust_robot_position_xy(0, error_y)
                 self.get_logger().info(f"Error in Y axis: {error_y}, Adjusting position for alignment")
             else:
@@ -631,9 +776,8 @@ class PosMovement(Node):
         self.get_logger().info("Aligning x axis with template matching bbox")
         bbox_center_x = bbox_center[0]
         error_x = frame_center_x - bbox_center_x
-        time.sleep(5.0)
 
-        if abs(error_x) > 10:
+        if abs(error_x) > 15: # IT WAS 10
             self.adjust_robot_position_xy(error_x, 0)
             self.get_logger().info(f"Error in X axis: {error_x}, Adjusting position for alignment")
         else:
@@ -744,12 +888,15 @@ class PosMovement(Node):
             if plan:
                 self.plan_and_execute(self.lite6, self.lite6_arm, self.get_logger(), sleep_time=0.5)
 
-    def plan_and_execute(self, robot, planning_component, logger, sleep_time, single_plan_parameters=None, multi_plan_parameters=None):
+    def plan_and_execute(self, robot, planning_component, logger, sleep_time,constraints=None, single_plan_parameters=None, multi_plan_parameters=None):
         if self.stop_pos_movement:
             logger.info("Execution halted due to stop signal.")
             return
 
         logger.info("Planning trajectory")
+
+        if constraints is not None:
+            planning_component.set_path_constraints(constraints)
 
         if multi_plan_parameters is not None:
             plan_result = planning_component.plan(multi_plan_parameters=multi_plan_parameters)
@@ -769,7 +916,7 @@ class PosMovement(Node):
         else:
             logger.error("Planning failed")
             self.failed_planning = True
-            time.sleep(0.5)
+            #time.sleep(0.5)
 
         time.sleep(sleep_time)
 

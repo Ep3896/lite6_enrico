@@ -226,7 +226,7 @@ class Movejoints(Node):
         # I also need to start again the pointcloud to detect the POS
         self.pointcloud_pub.publish(Bool(data=True))
         time.sleep(1.5)
-        rclpy.shutdown()
+        #rclpy.shutdown()
 
         #time.sleep(20)
 
